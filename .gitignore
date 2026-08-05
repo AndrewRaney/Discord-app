@@ -32,6 +32,7 @@ Desktop.ini
 _*.js
 *.tmp
 *.log
+.gh-config/
 
 # Incomplete packaging stub (optional keep source only)
 server/Send/node_modules/
