@@ -1,0 +1,38 @@
+# Dependencies & build
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+Share/
+**/Share/
+runtime/
+**/runtime/
+build-resources/
+*.exe
+
+# Local data
+*.sqlite
+*.sqlite-journal
+uploads/
+**/uploads/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+
+# Temp
+_*.js
+*.tmp
+*.log
+
+# Incomplete packaging stub (optional keep source only)
+server/Send/node_modules/
+server/Send/dist/
