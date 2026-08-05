@@ -142,7 +142,8 @@ function createWindow() {
     }).catch((err) => {
       console.error('Failed to list screen sources:', err);
       if (pendingScreenCallback) {
-        pendingScreenCallback({});
+        // null denies the request; {} throws "Video was requested..."
+        try { pendingScreenCallback(null); } catch (_) {}
         pendingScreenCallback = null;
       }
     });
@@ -158,12 +159,14 @@ app.whenReady().then(async () => {
     if (!pendingScreenCallback) return;
     const cb = pendingScreenCallback;
     pendingScreenCallback = null;
-    if (!sourceId) { cb({}); return; }
+    // Deny with null (not {}) — empty object crashes Electron main process
+    const deny = () => { try { cb(null); } catch (_) {} };
+    if (!sourceId) { deny(); return; }
     desktopCapturer.getSources({ types: ['screen', 'window'] }).then(sources => {
       const source = sources.find(s => s.id === sourceId);
       if (source) cb({ video: source, audio: 'loopback' });
-      else cb({});
-    }).catch(() => cb({}));
+      else deny();
+    }).catch(() => deny());
   });
 
   await startBackend();

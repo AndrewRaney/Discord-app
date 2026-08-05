@@ -41,12 +41,14 @@ ipcMain.on('source-selected', (_event, sourceId) => {
   if (!pendingScreenCallback) return;
   const cb = pendingScreenCallback;
   pendingScreenCallback = null;
-  if (!sourceId) { cb({}); return; }
+  // Deny with null (not {}) — empty object crashes Electron main process
+  const deny = () => { try { cb(null); } catch (_) {} };
+  if (!sourceId) { deny(); return; }
   desktopCapturer.getSources({ types: ['screen', 'window'] }).then(sources => {
     const source = sources.find(s => s.id === sourceId);
     if (source) cb({ video: source, audio: 'loopback' });
-    else cb({});
-  });
+    else deny();
+  }).catch(() => deny());
 });
 
 app.whenReady().then(() => {

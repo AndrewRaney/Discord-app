@@ -821,8 +821,17 @@
     .status-option:hover { background: rgba(255,255,255,0.06); }
 
     /* ── Voice speaking ── */
-    .vc-user-entry.speaking .vc-av { outline-color: #3ba55c !important; box-shadow: 0 0 0 2px #3ba55c; }
-    .vc-user-entry.speaking { color: white; }
+    .vc-user-entry.speaking .vc-av {
+      outline-color: #3ba55c !important;
+      box-shadow: 0 0 0 2px #3ba55c, 0 0 8px rgba(59, 165, 92, 0.55);
+    }
+    .vc-user-entry.speaking {
+      color: #fff;
+    }
+    .vc-user-entry.speaking > span:first-of-type {
+      color: #3ba55c;
+      font-weight: 600;
+    }
 
     /* ── Screen source picker ── */
     .sp-tab {
@@ -879,13 +888,20 @@
     /* ── Notifications ── */
     .notif-dot {
       position: fixed; top: 12px; right: 12px;
-      background: #ed4245; color: white;
-      border-radius: 999px; padding: 4px 10px;
-      font-size: 12px; font-weight: 700;
+      background: #2b2d31; color: #fff;
+      border: 1px solid #3f4147;
+      border-radius: 8px; padding: 10px 14px;
+      font-size: 13px; font-weight: 500;
       z-index: 9999; display: none;
+      max-width: 320px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45);
       animation: popIn 0.2s ease;
+      cursor: pointer;
+      line-height: 1.35;
     }
-    @keyframes popIn { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    .notif-dot .notif-from { color: #5865f2; font-weight: 700; }
+    .notif-dot .notif-body { color: #dcddde; font-weight: 400; margin-top: 2px; word-break: break-word; }
+    @keyframes popIn { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
     /* ── File sharing ── */
     .attach-btn {
@@ -2118,14 +2134,14 @@
         <div class="settings-row">
           <div class="settings-row-label">
             <div class="label-title">Desktop Notifications</div>
-            <div class="label-desc">Show notifications when window is not focused</div>
+            <div class="label-desc">OS popup when someone messages and the app is in the background</div>
           </div>
           <div class="toggle-switch on" id="desktopNotifToggle" onclick="toggleSetting('desktopNotif')"></div>
         </div>
         <div class="settings-row">
           <div class="settings-row-label">
             <div class="label-title">Notification Sound</div>
-            <div class="label-desc">Play a sound for new messages</div>
+            <div class="label-desc">Play a ping when someone else sends a message</div>
           </div>
           <div class="toggle-switch on" id="notifSoundToggle" onclick="toggleSetting('notifSound')"></div>
         </div>
@@ -2202,6 +2218,13 @@
             <div class="label-desc">Reduce echo from your speakers picked up by the mic</div>
           </div>
           <div class="toggle-switch on" id="echoCancellationToggle" onclick="toggleVoiceConstraint('echoCancellation')"></div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">
+            <div class="label-title">Automatic Gain Control</div>
+            <div class="label-desc">Auto-adjust mic volume so you stay audible without clipping</div>
+          </div>
+          <div class="toggle-switch on" id="autoGainControlToggle" onclick="toggleVoiceConstraint('autoGainControl')"></div>
         </div>
         <div class="settings-row">
           <div class="settings-row-label">
@@ -2482,6 +2505,7 @@
 
   // Voice
   let voiceUsers = {}; // channelId -> [usernames]
+  const speakingUsers = new Set(); // usernames currently speaking
   let inVoiceChannel = false;
   let isMuted = false;
   let isDeafened = false;
@@ -2563,6 +2587,9 @@
       await loadInvites();
       if (currentInvites.length > prev) playInviteDing();
       _lastInviteCount = currentInvites.length;
+      if (username) {
+        await loadFriendRequestsSilent();
+      }
     }, 10000);
   }
 
@@ -3005,6 +3032,21 @@
 
   // ── Channels ───────────────────────────────────────────────────────────────
 
+  function renderVcUserEntry(u) {
+    const name = typeof u === "object" ? u.username : u;
+    const muted = typeof u === "object" ? u.muted : false;
+    const deafened = typeof u === "object" ? u.deafened : false;
+    const mem = currentMembers.find(m => m.username === name) || {};
+    const av = mem.avatarUrl
+      ? `<img class="vc-av" src="${SERVER}${mem.avatarUrl}" style="width:20px;height:20px;">`
+      : `<div class="vc-av" style="background:${mem.avatarColor||'#5865f2'}">${escHtml(name[0].toUpperCase())}</div>`;
+    const icons = deafened
+      ? `<div class="vc-icons"><span class="vc-icon-deafened" title="Deafened">🔕</span></div>`
+      : (muted ? `<div class="vc-icons"><span class="vc-icon-muted" title="Muted">🔇</span></div>` : "");
+    const speakingCls = speakingUsers.has(name) ? " speaking" : "";
+    return `<div class="vc-user-entry${speakingCls}" data-vcname="${escHtml(name)}" onclick="openUserProfile(this.dataset.vcname,event)" oncontextmenu="openVcVolumeMenu(event,this.dataset.vcname)">${av}<span>${escHtml(name)}</span>${icons}</div>`;
+  }
+
   async function loadChannels() {
     const res = await fetch(`${SERVER}/channels/${currentServerId}`);
     channels = await res.json();
@@ -3044,17 +3086,7 @@
           <span class="ch-name">${escHtml(c.name)}</span>
           ${canManage ? `<span class="ch-delete" onclick="deleteChannel(event, ${c.id})">✕</span>` : ""}
         </div>
-        <div id="vcUsers_${c.id}">${(voiceUsers[String(c.id)] || []).map(u => {
-          const name = typeof u === 'object' ? u.username : u;
-          const muted = typeof u === 'object' ? u.muted : false;
-          const deafened = typeof u === 'object' ? u.deafened : false;
-          const mem = currentMembers.find(m => m.username === name) || {};
-          const av = mem.avatarUrl
-            ? `<img class="vc-av" src="${SERVER}${mem.avatarUrl}" style="width:20px;height:20px;">`
-            : `<div class="vc-av" style="background:${mem.avatarColor||'#5865f2'}">${escHtml(name[0].toUpperCase())}</div>`;
-          const icons = deafened ? `<div class="vc-icons"><span class="vc-icon-deafened" title="Deafened">🔕</span></div>` : (muted ? `<div class="vc-icons"><span class="vc-icon-muted" title="Muted">🔇</span></div>` : '');
-          return `<div class="vc-user-entry" data-vcname="${escHtml(name)}" onclick="openUserProfile(this.dataset.vcname,event)" oncontextmenu="openVcVolumeMenu(event,this.dataset.vcname)">${av}<span>${escHtml(name)}</span>${icons}</div>`;
-        }).join('')}</div>
+        <div id="vcUsers_${c.id}">${(voiceUsers[String(c.id)] || []).map(u => renderVcUserEntry(u)).join('')}</div>
       `).join("")}
     `;
   }
@@ -3322,7 +3354,7 @@
         audio: {
           noiseSuppression: appSettings.noiseSuppress,
           echoCancellation: appSettings.echoCancellation,
-          autoGainControl:  appSettings.noiseSuppress,
+          autoGainControl:  appSettings.autoGainControl !== false,
         },
         video: false
       });
@@ -3452,12 +3484,20 @@
 
   // voice_state handler replaced below (Feature 1 patch)
 
-  socket.on("friend_request_received", ({ from }) => {
-    friendRequests.push({ from, id: null });
-    updateFriendBadge();
+  socket.on("friend_request_received", ({ from, id }) => {
+    showToast(`Friend request from ${from}`, "success");
+    showNotif(`Friend request from ${from}`);
+    loadFriendRequests();
+    // Keep friends view in sync if open
+    if (typeof renderFriendsView === "function") {
+      loadFriendRequestsSilent().then(() => {
+        try { renderFriendsView(); } catch (_) {}
+      });
+    }
   });
 
   socket.on("friend_request_accepted", ({ by }) => {
+    showToast(`${by} accepted your friend request`, "success");
     loadFriends();
   });
 
@@ -3468,7 +3508,6 @@
     const inCorrectDm = currentDmKey && data.dmKey === currentDmKey;
     if (inCorrectChannel || inCorrectDm) {
       addMessage(data);
-      if (data.username !== username) showNotif(`${data.username}: ${data.message.startsWith('[FILE:') ? '📎 File' : data.message.slice(0, 40)}`);
     }
   });
 
@@ -3677,27 +3716,140 @@
   // ── Notifications ─────────────────────────────────────────────────────────
 
   let notifTimeout = null;
-  const notifSound = new Audio("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFhYmMkZOSkpGPj4+Qk5eamZiXlpWUlZeZm5ybmpmYl5eYmZudn56dmpiXlpeZm52fnp2cmpiXlZWWmJqcnJuZl5WTkpKTlZeZmpmYlpSTkZCQkZOVl5iYl5WTkZCPj5CSlJaXl5aUkpCOjY2Oj5GUlpeWlZOQjo2MjI2OkJOVlpWUkY+NjIuLjI2PkpSVlJOQjo2Li4uMjY+SlJWUkpCOjIqKio");
+  const _recentNotifIds = new Set();
 
-  function showNotif(text) {
-    if (document.hasFocus()) return;
-    if (!appSettings.desktopNotif) return;
+  function playMessageSound() {
+    if (!appSettings.notifSound) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.22, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+      [880, 1174.7].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        osc.start(now + i * 0.08);
+        osc.stop(now + 0.35);
+      });
+      setTimeout(() => ctx.close().catch(() => {}), 500);
+    } catch (_) {}
+  }
+
+  function messagePreviewText(msg) {
+    if (!msg) return "";
+    if (String(msg).startsWith("[FILE:")) return "📎 File";
+    if (String(msg).startsWith("[GIF]")) return "GIF";
+    return String(msg).slice(0, 80);
+  }
+
+  function isViewingMessageTarget(data) {
+    if (data.channelId != null && currentChannelId != null &&
+        Number(data.channelId) === Number(currentChannelId)) return true;
+    if (data.dmKey && currentDmKey && data.dmKey === currentDmKey) return true;
+    return false;
+  }
+
+  function alertNewMessage(data) {
+    if (!data || data.username === username) return;
+    if (typeof myBlocks !== "undefined" && myBlocks.has(data.username)) return;
+
+    const id = data.id != null ? String(data.id) : `${data.channelId || data.dmKey}-${data.username}-${data.message}`;
+    if (_recentNotifIds.has(id)) return;
+    _recentNotifIds.add(id);
+    setTimeout(() => _recentNotifIds.delete(id), 2500);
+
+    // Already reading this chat with the window focused — no ping
+    const focused = document.hasFocus() && !document.hidden;
+    if (isViewingMessageTarget(data) && focused) return;
+
+    const preview = messagePreviewText(data.message);
+    const where = data.dmKey
+      ? "Direct Message"
+      : (data.channelName ? `#${data.channelName}` : "chat");
+    const title = data.username;
+    const body = `${where}: ${preview}`;
+
+    playMessageSound();
+    showMessagePopup(title, preview, where, data);
+    showDesktopMessageNotif(title, body);
+  }
+
+  function showMessagePopup(from, preview, where, data) {
     const dot = document.getElementById("notifDot");
-    dot.textContent = "🔔 " + text;
+    if (!dot) return;
+    dot.innerHTML = `<div class="notif-from">${escHtml(from)}</div><div class="notif-body">${escHtml(where)} · ${escHtml(preview)}</div>`;
     dot.style.display = "block";
     clearTimeout(notifTimeout);
-    notifTimeout = setTimeout(() => { dot.style.display = "none"; }, 4000);
-    if (appSettings.notifSound) { try { notifSound.currentTime = 0; notifSound.play(); } catch(e) {} }
-    if ("Notification" in window && Notification.permission === "granted") {
-      new Notification("Discord Lite", { body: text, silent: true });
+    notifTimeout = setTimeout(() => { dot.style.display = "none"; }, 4500);
+    dot.onclick = () => {
+      dot.style.display = "none";
+      if (data?.dmKey) {
+        const thread = dmThreads.find(t => t.dmKey === data.dmKey);
+        const other = thread
+          ? (thread.user1 === username ? thread.user2 : thread.user1)
+          : data.username;
+        openDmView();
+        openDM(other);
+      } else if (data?.channelId && data?.serverId && data.serverId !== currentServerId) {
+        const srv = myServers.find(s => s.id === data.serverId);
+        if (srv) openServer(srv.id, srv.name).then(() => {
+          const ch = channels.find(c => c.id === data.channelId);
+          if (ch) openChannel(ch.id, ch.name, ch.type || "text");
+        });
+      } else if (data?.channelId) {
+        const ch = channels.find(c => c.id === data.channelId);
+        if (ch) openChannel(ch.id, ch.name, ch.type || "text");
+      }
+    };
+  }
+
+  function showDesktopMessageNotif(title, body) {
+    if (!appSettings.desktopNotif) return;
+    if (!document.hidden && document.hasFocus()) return;
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+      new Notification(title, { body, silent: true });
+    } catch (_) {}
+  }
+
+  // Legacy helper used by friend-request etc.
+  function showNotif(text) {
+    playMessageSound();
+    const dot = document.getElementById("notifDot");
+    if (dot) {
+      dot.innerHTML = `<div class="notif-body">${escHtml(text)}</div>`;
+      dot.style.display = "block";
+      clearTimeout(notifTimeout);
+      notifTimeout = setTimeout(() => { dot.style.display = "none"; }, 4000);
+      dot.onclick = null;
     }
+    showDesktopMessageNotif("Discord Lite", text);
   }
 
   function requestNotifPermission() {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
+    } else if ("Notification" in window && Notification.permission === "granted") {
+      showToast("Desktop notifications already enabled", "success");
+    } else if ("Notification" in window) {
+      showToast("Notifications blocked — enable them in OS / browser settings", "error");
     }
   }
+
+  socket.on("message_notify", (data) => {
+    alertNewMessage(data);
+    if (data.channelId && Number(data.channelId) !== Number(currentChannelId)) {
+      if (!unreadCounts[data.channelId]) unreadCounts[data.channelId] = 0;
+      unreadCounts[data.channelId]++;
+      saveUnread();
+      try { renderChannels(); } catch (_) {}
+    }
+  });
 
   // ── File Sharing ──────────────────────────────────────────────────────────
 
@@ -3710,6 +3862,12 @@
     const file = e.target.files[0];
     if (!file) return;
     if (!currentChannelId && !currentDmKey) return alert("Select a channel or DM first");
+    const maxBytes = 50 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      alert(`File too large (max 50MB). Yours is ${(file.size / 1024 / 1024).toFixed(1)}MB`);
+      e.target.value = "";
+      return;
+    }
 
     const formData = new FormData();
     formData.append("file", file);
@@ -3724,7 +3882,7 @@
           username,
           message: `[FILE:${data.url}:${data.originalName}:${data.mimetype}]`
         });
-      } else { alert("Upload failed"); }
+      } else { alert(data.error || "Upload failed"); }
     } catch { alert("Upload failed"); }
     e.target.value = "";
   }
@@ -3898,6 +4056,7 @@
     deafenKey: null,
     noiseSuppress: true,
     echoCancellation: true,
+    autoGainControl: true,
     noiseGate: false,
     noiseGateThreshold: 15,
     theme: 'dark',
@@ -3942,7 +4101,7 @@
     document.getElementById("settingsBioInput").value = myBio;
 
     // Sync toggles
-    ["compact","timestamp","desktopNotif","notifSound","vcSound","ptt","noiseSuppress","echoCancellation","noiseGate"].forEach(key => {
+    ["compact","timestamp","desktopNotif","notifSound","vcSound","ptt","noiseSuppress","echoCancellation","autoGainControl","noiseGate"].forEach(key => {
       const el = document.getElementById(key + "Toggle");
       if (el) el.classList.toggle("on", appSettings[key]);
     });
@@ -4124,7 +4283,7 @@
       }
     }
 
-    if ((key === "noiseSuppress" || key === "echoCancellation") && inVoiceChannel) {
+    if ((key === "noiseSuppress" || key === "echoCancellation" || key === "autoGainControl") && inVoiceChannel) {
       // Re-acquire mic with updated constraints
       const oldStream = localStream;
       try {
@@ -4132,7 +4291,7 @@
           audio: {
             noiseSuppression: appSettings.noiseSuppress,
             echoCancellation: appSettings.echoCancellation,
-            autoGainControl:  appSettings.noiseSuppress,
+            autoGainControl:  appSettings.autoGainControl !== false,
           },
           video: false
         });
@@ -5025,19 +5184,7 @@
     voiceUsers[channelId] = users;
     const container = document.getElementById(`vcUsers_${channelId}`);
     if (container) {
-      container.innerHTML = users.map(u => {
-        const name = typeof u === "object" ? u.username : u;
-        const muted = typeof u === "object" ? u.muted : false;
-        const deafened = typeof u === "object" ? u.deafened : false;
-        let icons = "";
-        if (deafened) icons = `<span class="vc-icon-deafened" title="Deafened">🔕</span>`;
-        else if (muted) icons = `<span class="vc-icon-muted" title="Muted">🔇</span>`;
-        const mem = currentMembers.find(m => m.username === name) || {};
-        const av = mem.avatarUrl
-          ? `<img class="vc-av" src="${SERVER}${mem.avatarUrl}" style="width:20px;height:20px;">`
-          : `<div class="vc-av" style="background:${mem.avatarColor||'#5865f2'}">${escHtml(name[0].toUpperCase())}</div>`;
-        return `<div class="vc-user-entry">${av}<span>${escHtml(name)}</span>${icons ? `<div class="vc-icons">${icons}</div>` : ""}</div>`;
-      }).join("");
+      container.innerHTML = users.map(u => renderVcUserEntry(u)).join("");
     }
   });
 
@@ -5510,13 +5657,24 @@
   let noiseGateGain = null;
   let processedStream = null;  // The stream actually sent to peers (gated/processed)
 
+  function setUserSpeaking(name, speaking) {
+    if (!name) return;
+    if (speaking) speakingUsers.add(name);
+    else speakingUsers.delete(name);
+    document.querySelectorAll(".vc-user-entry").forEach(el => {
+      if (el.dataset.vcname === name) el.classList.toggle("speaking", speaking);
+    });
+  }
+
   function startSpeakingDetection(stream) {
+    stopSpeakingDetection();
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       noiseGateCtx = ctx;
       const src = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.3;
       speakingAnalyser = analyser;
 
       if (appSettings.noiseGate) {
@@ -5536,24 +5694,33 @@
         processedStream = null;
       }
 
-      const data = new Uint8Array(analyser.frequencyBinCount);
+      const freqData = new Uint8Array(analyser.frequencyBinCount);
+      const timeData = new Uint8Array(analyser.fftSize);
       let wasSpeaking = false;
       speakingInterval = setInterval(() => {
-        analyser.getByteFrequencyData(data);
-        const vol = data.reduce((a, b) => a + b, 0) / data.length;
+        // Frequency average (noise gate)
+        analyser.getByteFrequencyData(freqData);
+        const vol = freqData.reduce((a, b) => a + b, 0) / freqData.length;
 
-        // Noise gate: mute gain when below threshold
         if (appSettings.noiseGate && noiseGateGain) {
           const thresh = appSettings.noiseGateThreshold;
           const gated = vol < thresh;
           noiseGateGain.gain.setTargetAtTime(gated ? 0 : 1, ctx.currentTime, 0.02);
         }
 
-        const speaking = vol > 10;
+        // Time-domain RMS is more reliable for "is talking" highlight
+        analyser.getByteTimeDomainData(timeData);
+        let sum = 0;
+        for (let i = 0; i < timeData.length; i++) {
+          const v = (timeData[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / timeData.length);
+        const speaking = !isMuted && rms > 0.035;
         if (speaking !== wasSpeaking) {
           wasSpeaking = speaking;
           if (inVoiceChannel) socket.emit("voice_speaking", { channelId: currentVoiceChannelId, username, speaking });
-          document.querySelectorAll(`.vc-user-entry[data-vcname="${username}"]`).forEach(el => el.classList.toggle("speaking", speaking));
+          setUserSpeaking(username, speaking);
         }
       }, 50);
     } catch(e) { console.warn("Speaking detection error:", e); }
@@ -5572,10 +5739,12 @@
     if (noiseGateCtx) { noiseGateCtx.close().catch(() => {}); noiseGateCtx = null; }
     noiseGateGain = null;
     processedStream = null;
+    speakingAnalyser = null;
+    if (username) setUserSpeaking(username, false);
   }
 
   socket.on("voice_speaking", ({ username: u, speaking }) => {
-    document.querySelectorAll(`.vc-user-entry[data-vcname="${u}"]`).forEach(el => el.classList.toggle("speaking", speaking));
+    setUserSpeaking(u, speaking);
   });
 
   // ── Audit Log ─────────────────────────────────────────────────────────────
@@ -6499,12 +6668,8 @@
     }
   });
 
-  // Hook into message display to show desktop notifs and unread badges
-  socket.on("receive_message", function notifHook(data) {
-    if (data.username === username) return;
-    showDesktopNotif(`${data.username}`, data.message?.slice(0, 80) || "");
-    if (data.channelId && data.channelId !== currentChannelId) bumpUnread(data.channelId);
-  });
+  // Hook: unread for in-room messages already handled via message_notify for other channels
+  // (kept empty intentionally — alerts live in message_notify / alertNewMessage)
 
   // ── Patch openDM to show call/poll buttons ────────────────────────────────
   const _origOpenDM = openDM;

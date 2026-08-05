@@ -24,7 +24,7 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_DIR),
   filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
 });
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
+const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB limit
 
 const app = express();
 app.use(cors({ origin: "*" }));
@@ -324,9 +324,35 @@ io.on("connection", (socket) => {
       if (!channel) return;
       const saved = await Message.create({ serverId: channel.serverId, channelId, username, message, replyToId: replyToId || null, replyPreview, replyAuthor });
       io.to(`channel_${channelId}`).emit("receive_message", saved);
+      // Alert all online server members (even if they aren't in this channel room)
+      const members = await ServerMember.findAll({ where: { serverId: channel.serverId } });
+      const preview = String(message).startsWith("[FILE:") ? "📎 File" : String(message).slice(0, 120);
+      const notif = {
+        id: saved.id,
+        channelId,
+        serverId: channel.serverId,
+        username,
+        message: preview,
+        channelName: channel.name
+      };
+      for (const m of members) {
+        if (m.username === username) continue;
+        io.to(`user_${m.username}`).emit("message_notify", notif);
+      }
     } else if (key) {
       const saved = await Message.create({ dmKey: key, username, message, replyToId: replyToId || null, replyPreview, replyAuthor });
       io.to(`dm_${key}`).emit("receive_message", saved);
+      const thread = await DirectMessage.findOne({ where: { dmKey: key } });
+      if (thread) {
+        const other = thread.user1 === username ? thread.user2 : thread.user1;
+        const preview = String(message).startsWith("[FILE:") ? "📎 File" : String(message).slice(0, 120);
+        io.to(`user_${other}`).emit("message_notify", {
+          id: saved.id,
+          dmKey: key,
+          username,
+          message: preview
+        });
+      }
     }
   });
 
@@ -764,21 +790,41 @@ app.post("/open-dm", async (req, res) => {
 
 app.post("/friend-request", async (req, res) => {
   try {
-    const { from, to } = req.body;
-    if (!from || !to) return res.status(400).json({ error: "Missing data" });
-    if (from === to) return res.status(400).json({ error: "Cannot add yourself" });
-    const toUser = await User.findOne({ where: { username: to } });
+    const from = String(req.body.from || "").trim();
+    const toRaw = String(req.body.to || "").trim();
+    if (!from || !toRaw) return res.status(400).json({ error: "Missing data" });
+    if (from.toLowerCase() === toRaw.toLowerCase()) return res.status(400).json({ error: "Cannot add yourself" });
+
+    // Case-insensitive username match (YeetDaddy === yeetdaddy)
+    const toUser = await User.findOne({
+      where: sequelize.where(sequelize.fn("lower", sequelize.col("username")), toRaw.toLowerCase())
+    });
     if (!toUser) return res.status(404).json({ error: "User not found" });
-    const existing = await FriendRequest.findOne({ where: { [Op.or]: [{ from, to }, { from: to, to: from }] } });
+    const to = toUser.username;
+
+    const existing = await FriendRequest.findOne({
+      where: {
+        [Op.or]: [
+          { from, to },
+          { from: to, to: from }
+        ]
+      }
+    });
     if (existing) {
       if (existing.status === "accepted") return res.status(400).json({ error: "Already friends" });
       if (existing.status === "pending") return res.status(400).json({ error: "Request already pending" });
     }
-    await FriendRequest.create({ from, to, status: "pending" });
+
+    const created = await FriendRequest.create({ from, to, status: "pending" });
+    // Notify by socket id AND user room (more reliable over tunnels)
     const targetSocketId = onlineUsers.get(to);
-    if (targetSocketId) io.to(targetSocketId).emit("friend_request_received", { from });
-    res.json({ message: "Friend request sent" });
-  } catch { res.status(500).json({ error: "Failed to send request" }); }
+    if (targetSocketId) io.to(targetSocketId).emit("friend_request_received", { from, id: created.id });
+    io.to(`user_${to}`).emit("friend_request_received", { from, id: created.id });
+    res.json({ message: "Friend request sent", to });
+  } catch (e) {
+    console.error("friend-request error:", e);
+    res.status(500).json({ error: "Failed to send request" });
+  }
 });
 
 app.get("/friend-requests/:username", async (req, res) => {
@@ -1020,6 +1066,17 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: "No file" });
     res.json({ url: `/uploads/${req.file.filename}`, originalName: req.file.originalname, mimetype: req.file.mimetype });
   } catch { res.status(500).json({ error: "Upload failed" }); }
+});
+
+// Clear multer / upload errors (e.g. file too large)
+app.use((err, req, res, next) => {
+  if (err && err.code === "LIMIT_FILE_SIZE") {
+    return res.status(400).json({ error: "File too large (max 50MB)" });
+  }
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: err.message || "Upload error" });
+  }
+  next(err);
 });
 
 // ── Reactions ─────────────────────────────────────────────────────────────────
