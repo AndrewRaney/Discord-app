@@ -1,0 +1,38 @@
+HOW TO HOST DISCORD LITE ON YOUR PC
+=====================================
+
+Right now Discord Lite is hosted on whoever runs it as the "host".
+If you want to host on YOUR computer instead, do this:
+
+1) Download the installer (recommended):
+   https://github.com/AndrewRaney/Discord-app/releases/latest
+
+   Get:  Discord-Lite-Setup-….exe
+   (Prefer Setup over Portable — Setup can auto-update later.)
+
+2) Run the installer and open Discord Lite.
+
+3) On the login screen, leave "Server address" BLANK.
+   Create an account (or sign in). You are now the host.
+   The app runs on your PC and opens a public tunnel link.
+
+4) In the app go to:
+   Settings → Connection
+   Copy the "Public tunnel" link.
+
+5) Send that link to your friends.
+   Friends paste it into "Server address", then Create Account
+   on YOUR server (not their own blank/local one).
+
+NOTES
+- Keep Discord Lite open while friends are using it.
+- Your PC needs to stay on and connected to the internet.
+- Only one person should host at a time for a shared group of friends.
+- Friends who already have accounts on someone else's host need new
+  accounts on yours (each host has its own user list / chat history).
+
+Latest release:
+https://github.com/AndrewRaney/Discord-app/releases/latest
+
+Repo:
+https://github.com/AndrewRaney/Discord-app

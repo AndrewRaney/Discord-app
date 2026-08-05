@@ -16,5 +16,8 @@ Portable `.exe` is quick to try, but does **not** auto-update. Use the Setup ins
 2. Host: Settings → Connection → copy **Public tunnel** link
 3. Friends paste that link in Server address → Create Account
 
+## Friend wants to host on their PC instead?
+See **[How to Host.txt](./How%20to%20Host.txt)** — download the Setup from Releases, leave Server address blank, share their tunnel link.
+
 ## Repo
 https://github.com/AndrewRaney/Discord-app
