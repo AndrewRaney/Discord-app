@@ -1263,6 +1263,126 @@ app.post("/server/apply", auth, async (req, res) => {
   res.json({ applied: true });
 });
 
+const os = require("os");
+
+let publicTunnel = null;
+let tunnelUrl = null;
+let tunnelStarting = false;
+let tunnelError = null;
+
+async function ensureCloudflared() {
+  const { bin, install } = require("cloudflared");
+  if (!fs.existsSync(bin)) {
+    console.log("Installing cloudflared binary…");
+    await install(bin);
+  }
+}
+
+async function startPublicTunnel() {
+  if (tunnelUrl) return tunnelUrl;
+  if (tunnelStarting) {
+    // wait briefly for in-flight start
+    for (let i = 0; i < 40 && tunnelStarting; i++) await new Promise((r) => setTimeout(r, 250));
+    if (tunnelUrl) return tunnelUrl;
+  }
+  tunnelStarting = true;
+  tunnelError = null;
+  try {
+    await ensureCloudflared();
+    const { Tunnel } = require("cloudflared");
+    publicTunnel = Tunnel.quick("http://127.0.0.1:3001");
+    tunnelUrl = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Tunnel timed out")), 90000);
+      publicTunnel.once("url", (url) => {
+        clearTimeout(timer);
+        resolve(url);
+      });
+      publicTunnel.once("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      publicTunnel.once("exit", () => {
+        tunnelUrl = null;
+        publicTunnel = null;
+      });
+    });
+    console.log("Public tunnel:", tunnelUrl);
+    return tunnelUrl;
+  } catch (err) {
+    console.error("Cloudflare tunnel failed, trying localtunnel…", err.message || err);
+    try {
+      const localtunnel = require("localtunnel");
+      const t = await localtunnel({ port: 3001 });
+      publicTunnel = t;
+      tunnelUrl = t.url;
+      t.on("close", () => {
+        if (publicTunnel === t) {
+          publicTunnel = null;
+          tunnelUrl = null;
+        }
+      });
+      console.log("Public tunnel (localtunnel):", tunnelUrl);
+      return tunnelUrl;
+    } catch (err2) {
+      tunnelError = (err2 && err2.message) || (err && err.message) || "Tunnel failed";
+      console.error("Tunnel failed:", tunnelError);
+      throw err2;
+    }
+  } finally {
+    tunnelStarting = false;
+  }
+}
+
+function stopPublicTunnel() {
+  if (!publicTunnel) return;
+  try {
+    if (typeof publicTunnel.stop === "function") publicTunnel.stop();
+    else if (typeof publicTunnel.close === "function") publicTunnel.close();
+  } catch (_) {}
+  publicTunnel = null;
+  tunnelUrl = null;
+  tunnelError = null;
+}
+
+app.get("/lan-info", (req, res) => {
+  const nets = os.networkInterfaces();
+  const ips = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      const family = net.family === "IPv4" || net.family === 4;
+      if (family && !net.internal) ips.push({ name, address: net.address });
+    }
+  }
+  res.json({
+    port: 3001,
+    ips,
+    urls: ips.map((i) => `http://${i.address}:3001`),
+    tunnelUrl,
+    tunnelStarting,
+    tunnelError
+  });
+});
+
+app.get("/tunnel", (req, res) => {
+  res.json({ url: tunnelUrl, starting: tunnelStarting, error: tunnelError });
+});
+
+app.post("/tunnel/start", async (req, res) => {
+  try {
+    const url = await startPublicTunnel();
+    res.json({ url });
+  } catch (e) {
+    res.status(500).json({ error: tunnelError || e.message || "Failed to start tunnel" });
+  }
+});
+
+app.post("/tunnel/stop", (req, res) => {
+  stopPublicTunnel();
+  res.json({ ok: true });
+});
+
+app.get("/health", (req, res) => res.json({ ok: true, tunnelUrl }));
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 let listening = false;
@@ -1273,18 +1393,21 @@ function startServer() {
     console.log("Database synced");
     return new Promise((resolve, reject) => {
       server.once("error", (err) => {
-        if (err.code === "EADDRINUSE") {
-          console.log("Port 3001 already in use — reusing existing server");
+        if (err.code === "EADDRINUSE" || err.code === "EACCES") {
+          console.log("Port 3001 busy — assuming server already running");
           listening = true;
           resolve();
+          startPublicTunnel().catch(() => {});
         } else {
           reject(err);
         }
       });
-      server.listen(3001, () => {
+      server.listen(3001, "0.0.0.0", () => {
         listening = true;
-        console.log("Server running on port 3001");
+        console.log("Server running on port 3001 (LAN accessible)");
         resolve();
+        // Public internet tunnel (Cloudflare) so friends can join from anywhere
+        startPublicTunnel().catch(() => {});
       });
     });
   });
@@ -1297,4 +1420,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { startServer, app, server, io };
+module.exports = { startServer, app, server, io, startPublicTunnel, stopPublicTunnel };

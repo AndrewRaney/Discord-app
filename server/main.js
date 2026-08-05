@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, desktopCapturer, ipcMain } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const net = require('net');
@@ -35,8 +35,6 @@ function startBackend() {
   const serverJs = path.join(appRoot, 'server.js');
   const dataDir = app.isPackaged ? app.getPath('userData') : appRoot;
 
-  // Packaged: run server with Electron's Node (matches rebuilt sqlite3)
-  // Dev: system Node
   const cmd = app.isPackaged ? process.execPath : 'node';
   const env = {
     ...process.env,
@@ -46,16 +44,72 @@ function startBackend() {
 
   serverProc = spawn(cmd, [serverJs], {
     cwd: appRoot,
-    stdio: 'ignore',
+    stdio: app.isPackaged ? ['ignore', 'pipe', 'pipe'] : 'ignore',
     windowsHide: true,
     shell: !app.isPackaged && process.platform === 'win32',
     env
   });
   serverProc.on('error', (err) => console.error('Failed to start backend:', err));
+  if (serverProc.stderr) {
+    serverProc.stderr.on('data', (buf) => console.error('[server]', buf.toString()));
+  }
+  if (serverProc.stdout) {
+    serverProc.stdout.on('data', (buf) => console.log('[server]', buf.toString()));
+  }
 
-  return waitForPort(3001).catch(() => {
-    return waitForPort(3001, '127.0.0.1', 5).catch(() => {});
+  return waitForPort(3001).catch(async () => {
+    try {
+      await waitForPort(3001, '127.0.0.1', 8);
+    } catch (_) {
+      dialog.showErrorBox(
+        'Discord Lite',
+        'Could not start the local server on port 3001.\n\nClose any other Discord Lite window and try again.'
+      );
+    }
   });
+}
+
+function setupAutoUpdates() {
+  if (!app.isPackaged) return;
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch (err) {
+    console.error('electron-updater missing', err);
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info) => {
+    console.log('Update available', info && info.version);
+  });
+
+  autoUpdater.on('update-downloaded', async (info) => {
+    const version = (info && info.version) || 'new';
+    const result = await dialog.showMessageBox(mainWin || undefined, {
+      type: 'info',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Update ready',
+      message: `Discord Lite ${version} is ready to install.`,
+      detail: 'Restart to update. Your friend gets these automatically when you publish a release.'
+    });
+    if (result.response === 0) {
+      autoUpdater.quitAndInstall();
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('Auto-update error:', err);
+  });
+
+  // Check a bit after launch so startup isn't blocked
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((err) => console.error('Update check failed:', err));
+  }, 5000);
 }
 
 function createWindow() {
@@ -114,6 +168,7 @@ app.whenReady().then(async () => {
 
   await startBackend();
   createWindow();
+  setupAutoUpdates();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

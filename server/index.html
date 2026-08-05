@@ -435,6 +435,13 @@
       text-align: center; color: #949ba4; font-size: 14px;
       margin-top: 6px; font-weight: 500;
     }
+    .auth-server-label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; color: #96989d; display: block; margin-bottom: 6px;
+    }
+    .auth-server-hint {
+      font-size: 12px; color: #949ba4; line-height: 1.4; margin: 0 0 14px;
+    }
     .auth-box h3 {
       font-size: 12px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.04em; color: #96989d; margin-bottom: -8px;
@@ -1421,6 +1428,9 @@
 
     <!-- Landing -->
     <div id="authLanding">
+      <label class="auth-server-label">Server address</label>
+      <input id="serverAddress" placeholder="Friend's tunnel URL or LAN IP (blank = this PC)" style="width:100%;margin-bottom:6px">
+      <p class="auth-server-hint">Host: open Settings → Connection and share your <b>Public tunnel</b> link. Friend: paste that link here, then Create Account.</p>
       <button onclick="showPanel('registerPanel')" style="width:100%;margin-bottom:10px">Create Account</button>
       <button onclick="showPanel('loginPanel')" style="width:100%;background:#1a1c20">Sign In</button>
     </div>
@@ -1977,6 +1987,7 @@
   <div class="settings-sidebar">
     <div class="settings-section-label">User Settings</div>
     <div class="settings-nav-item active" onclick="showSettingsTab('account')" id="nav-account">Account</div>
+    <div class="settings-nav-item" onclick="showSettingsTab('connection')" id="nav-connection">Connection</div>
     <div class="settings-nav-item" onclick="showSettingsTab('appearance')" id="nav-appearance">Appearance</div>
     <div class="settings-nav-item" onclick="showSettingsTab('notifications')" id="nav-notifications">Notifications</div>
     <div class="settings-nav-item" onclick="showSettingsTab('voice')" id="nav-voice">Voice & Audio</div>
@@ -2016,7 +2027,39 @@
           <input type="password" id="currentPassword" placeholder="Current password" style="width:100%;background:#0e0f11;border:1px solid #252830;border-radius:4px;padding:8px 10px;color:white;font-size:13px;outline:none;font-family:inherit">
           <input type="password" id="newPassword" placeholder="New password" style="width:100%;background:#0e0f11;border:1px solid #252830;border-radius:4px;padding:8px 10px;color:white;font-size:13px;outline:none;font-family:inherit;margin-top:6px">
           <input type="password" id="confirmPassword" placeholder="Confirm new password" style="width:100%;background:#0e0f11;border:1px solid #252830;border-radius:4px;padding:8px 10px;color:white;font-size:13px;outline:none;font-family:inherit;margin-top:6px">
-          <button class="settings-save-btn" onclick="changePassword()" style="margin-top:4px">Update Password</button>
+      <button class="settings-save-btn" onclick="changePassword()" style="margin-top:4px">Update Password</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connection -->
+    <div id="tab-connection" class="hidden">
+      <h1>Connection</h1>
+      <div class="settings-group">
+        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+          <div class="label-title" style="color:white;font-size:14px;font-weight:600">Connected to</div>
+          <div id="connectionCurrentUrl" style="font-size:13px;color:#b5bac1;word-break:break-all"></div>
+        </div>
+        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+          <div class="label-title" style="color:white;font-size:14px;font-weight:600">Public tunnel (internet)</div>
+          <div class="label-desc">Share this link with friends anywhere. They paste it on the login screen, then create an account.</div>
+          <div id="connectionTunnelUrl" style="font-size:13px;color:#dbdee1;word-break:break-all;line-height:1.5">Starting tunnel…</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="settings-save-btn" onclick="copyTunnelUrl()">Copy tunnel link</button>
+            <button class="settings-save-btn" onclick="startTunnelFromSettings()">Start / Refresh tunnel</button>
+            <button class="btn-ghost" onclick="stopTunnelFromSettings()">Stop tunnel</button>
+          </div>
+        </div>
+        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+          <div class="label-title" style="color:white;font-size:14px;font-weight:600">LAN IPs (same Wi‑Fi only)</div>
+          <div id="connectionLanIps" style="font-size:13px;color:#dbdee1;line-height:1.6"></div>
+          <button class="settings-save-btn" onclick="copyHostAddress()">Copy first LAN IP</button>
+        </div>
+        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+          <div class="label-title" style="color:white;font-size:14px;font-weight:600">Join another host</div>
+          <input id="settingsServerAddress" placeholder="https://xxxx.trycloudflare.com or 192.168.1.20" style="width:100%;background:#0e0f11;border:1px solid #252830;border-radius:4px;padding:8px 10px;color:white;font-size:13px;outline:none;font-family:inherit">
+          <button class="settings-save-btn" onclick="applySettingsServerAddress()">Connect &amp; Reload</button>
+          <button class="btn-ghost" onclick="resetToLocalServer()" style="margin-top:4px">Reset to this PC</button>
         </div>
       </div>
     </div>
@@ -2331,9 +2374,57 @@
 
 <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 <script>
-  // Local API (override with window.__DISCORD_SERVER__ if needed)
-  const SERVER = window.__DISCORD_SERVER__ || 'http://localhost:3001';
-  const socket = io(SERVER);
+  function normalizeServerUrl(raw) {
+    let s = String(raw || "").trim();
+    if (!s || s.toLowerCase() === "localhost" || s === "127.0.0.1") return "http://localhost:3001";
+    // bare IPv4 → http + :3001
+    if (/^(\d{1,3}\.){3}\d{1,3}(:\d+)?$/.test(s)) {
+      s = "http://" + s;
+    } else if (!/^https?:\/\//i.test(s)) {
+      // domain / tunnel hostname → prefer https (cloudflare/loca.lt)
+      s = "https://" + s;
+    }
+    s = s.replace(/\/$/, "");
+    try {
+      const u = new URL(s);
+      const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(u.hostname);
+      const isLocal = u.hostname === "localhost";
+      // Only force :3001 for local/LAN addresses — never for public tunnels
+      if (!u.port && (isIp || isLocal)) {
+        s = u.protocol + "//" + u.hostname + ":3001";
+      }
+    } catch (_) {}
+    return s;
+  }
+
+  function getSavedServer() {
+    return normalizeServerUrl(window.__DISCORD_SERVER__ || localStorage.getItem("discordLiteServer") || "http://localhost:3001");
+  }
+
+  // Shared API — both people must point at the SAME host to see each other
+  let SERVER = getSavedServer();
+  let socket = io(SERVER, { transports: ["websocket", "polling"] });
+
+  function saveServerAddressFromInput(reloadIfChanged) {
+    const el = document.getElementById("serverAddress");
+    const next = normalizeServerUrl(el && el.value ? el.value : SERVER);
+    const prev = SERVER;
+    localStorage.setItem("discordLiteServer", next);
+    SERVER = next;
+    if (el) el.value = next === "http://localhost:3001" ? "" : next.replace(/^https?:\/\//, "");
+    if (reloadIfChanged && next !== prev) {
+      location.reload();
+      return false;
+    }
+    return true;
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const el = document.getElementById("serverAddress");
+    if (el) {
+      el.value = SERVER === "http://localhost:3001" ? "" : SERVER.replace(/^https?:\/\//, "");
+    }
+  });
 
   let _connToastAt = 0;
   function connToast(msg, type) {
@@ -2343,7 +2434,7 @@
     showToast(msg, type);
   }
   socket.on('disconnect', () => connToast('Disconnected from server', 'error'));
-  socket.on('connect_error', () => connToast('Cannot reach ' + SERVER + ' — is server.bat running?', 'error'));
+  socket.on('connect_error', () => connToast('Cannot reach ' + SERVER + ' — check the host IP / firewall', 'error'));
 
   function showToast(text, type) {
     if (text == null || text === '') return;
@@ -2478,6 +2569,7 @@
   // ── Auth ───────────────────────────────────────────────────────────────────
 
   async function register() {
+    if (!saveServerAddressFromInput(true)) return;
     const u = document.getElementById("registerUsername").value.trim();
     const p = document.getElementById("registerPassword").value.trim();
     if (!u || !p) return alert("Fill in both fields");
@@ -2495,6 +2587,7 @@
   }
 
   async function login() {
+    if (!saveServerAddressFromInput(true)) return;
     const u = document.getElementById("loginUsername").value.trim();
     const p = document.getElementById("loginPassword").value.trim();
     const res = await fetch(`${SERVER}/login`, {
@@ -3889,12 +3982,115 @@
   }
 
   function showSettingsTab(tab) {
-    ["account","appearance","notifications","voice","keybinds"].forEach(t => {
-      document.getElementById("tab-" + t).classList.add("hidden");
-      document.getElementById("nav-" + t).classList.remove("active");
+    ["account","connection","appearance","notifications","voice","keybinds"].forEach(t => {
+      const el = document.getElementById("tab-" + t);
+      if (el) el.classList.add("hidden");
+      const nav = document.getElementById("nav-" + t);
+      if (nav) nav.classList.remove("active");
     });
-    document.getElementById("tab-" + tab).classList.remove("hidden");
-    document.getElementById("nav-" + tab).classList.add("active");
+    const tabEl = document.getElementById("tab-" + tab);
+    if (tabEl) tabEl.classList.remove("hidden");
+    const navEl = document.getElementById("nav-" + tab);
+    if (navEl) navEl.classList.add("active");
+    if (tab === "connection") refreshConnectionSettings();
+  }
+
+  async function refreshConnectionSettings() {
+    const urlEl = document.getElementById("connectionCurrentUrl");
+    const ipsEl = document.getElementById("connectionLanIps");
+    const tunEl = document.getElementById("connectionTunnelUrl");
+    const input = document.getElementById("settingsServerAddress");
+    if (urlEl) urlEl.textContent = SERVER;
+    if (input) input.value = SERVER === "http://localhost:3001" ? "" : SERVER.replace(/^https?:\/\//, "");
+    if (ipsEl) ipsEl.textContent = "Loading…";
+    if (tunEl) tunEl.textContent = "Loading…";
+    try {
+      const res = await fetch(`${SERVER}/lan-info`);
+      const data = await res.json();
+      window._hostUrls = data.urls || [];
+      window._tunnelUrl = data.tunnelUrl || "";
+      if (!window._hostUrls.length) {
+        ipsEl.textContent = "No LAN IP found.";
+      } else {
+        ipsEl.innerHTML = window._hostUrls.map(u => `<div><code>${u}</code></div>`).join("");
+      }
+      if (data.tunnelStarting && !data.tunnelUrl) {
+        tunEl.textContent = "Starting public tunnel… (can take ~10s)";
+        setTimeout(refreshConnectionSettings, 2000);
+      } else if (data.tunnelUrl) {
+        tunEl.innerHTML = `<code style="color:#3ba55c">${data.tunnelUrl}</code>`;
+      } else if (data.tunnelError) {
+        tunEl.textContent = "Tunnel error: " + data.tunnelError;
+      } else {
+        tunEl.textContent = "No tunnel yet — click Start / Refresh tunnel";
+      }
+    } catch {
+      ipsEl.textContent = "Could not load host info.";
+      tunEl.textContent = "Could not load tunnel info (are you on a remote server?)";
+      window._hostUrls = [];
+      window._tunnelUrl = "";
+    }
+  }
+
+  function copyHostAddress() {
+    const url = (window._hostUrls && window._hostUrls[0]) || SERVER;
+    const text = url.replace(/^https?:\/\//, "");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => showToast("Copied LAN address", "success"));
+    } else {
+      showToast(text, "success");
+    }
+  }
+
+  function copyTunnelUrl() {
+    const url = window._tunnelUrl || "";
+    if (!url) return showToast("Tunnel not ready yet", "error");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(() => showToast("Copied tunnel link", "success"));
+    } else {
+      showToast(url, "success");
+    }
+  }
+
+  async function startTunnelFromSettings() {
+    const tunEl = document.getElementById("connectionTunnelUrl");
+    if (tunEl) tunEl.textContent = "Starting public tunnel…";
+    try {
+      const res = await fetch(`${SERVER}/tunnel/start`, { method: "POST" });
+      const data = await res.json();
+      if (data.url) {
+        window._tunnelUrl = data.url;
+        showToast("Tunnel ready", "success");
+      } else {
+        showToast(data.error || "Tunnel failed", "error");
+      }
+    } catch {
+      showToast("Could not start tunnel", "error");
+    }
+    refreshConnectionSettings();
+  }
+
+  async function stopTunnelFromSettings() {
+    try {
+      await fetch(`${SERVER}/tunnel/stop`, { method: "POST" });
+      window._tunnelUrl = "";
+      showToast("Tunnel stopped", "success");
+    } catch {
+      showToast("Could not stop tunnel", "error");
+    }
+    refreshConnectionSettings();
+  }
+
+  function applySettingsServerAddress() {
+    const input = document.getElementById("settingsServerAddress");
+    const next = normalizeServerUrl(input && input.value);
+    localStorage.setItem("discordLiteServer", next);
+    location.reload();
+  }
+
+  function resetToLocalServer() {
+    localStorage.setItem("discordLiteServer", "http://localhost:3001");
+    location.reload();
   }
 
   function toggleSetting(key) {

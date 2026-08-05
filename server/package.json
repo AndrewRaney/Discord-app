@@ -1,13 +1,15 @@
 {
   "name": "discord-lite",
   "productName": "Discord Lite",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local Discord-style chat app",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win portable",
-    "build:installer": "electron-builder --win nsis"
+    "build": "electron-builder --win portable nsis",
+    "build:portable": "electron-builder --win portable",
+    "build:installer": "electron-builder --win nsis",
+    "release": "electron-builder --win nsis --publish always"
   },
   "keywords": [],
   "author": "",
@@ -15,9 +17,12 @@
   "type": "commonjs",
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "cloudflared": "^0.7.1",
     "cors": "^2.8.6",
+    "electron-updater": "^6.6.2",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
+    "localtunnel": "^2.0.2",
     "multer": "^2.1.1",
     "sequelize": "^6.37.8",
     "socket.io": "^4.8.3",
@@ -44,25 +49,34 @@
       "!build-resources/**",
       "!**/*.bat",
       "!**/*.vbs",
-      "!**/_*.js",
       "!database.sqlite",
-      "!uploads/**"
+      "!uploads/**",
+      "!.gh-config/**"
     ],
-    "extraResources": [],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AndrewRaney",
+        "repo": "Discord-app"
+      }
+    ],
     "win": {
       "target": [
+        "nsis",
         "portable"
       ],
-      "artifactName": "Discord-Lite-Portable.exe"
-    },    "portable": {
-      "artifactName": "Discord-Lite-Portable.exe"
+      "artifactName": "Discord-Lite-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Discord-Lite-Portable-${version}.exe"
     },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "shortcutName": "Discord Lite",
-      "artifactName": "Discord-Lite-Setup.exe"
+      "artifactName": "Discord-Lite-Setup-${version}.exe"
     }
   }
 }

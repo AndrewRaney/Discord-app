@@ -4,12 +4,17 @@
 1. First time: double-click `setup.bat`
 2. Double-click **Discord Lite** on your Desktop (or `Discord Lite.vbs`)
 
-## Send to friends
-1. Double-click `Build Share Package.bat` (rebuilds when you change the app)
-2. Send them this file:
-   - `Share\Discord-Lite-Portable.exe`
-   - also copied to your Desktop as `Discord-Lite-Portable.exe`
+## Send to friends (with auto-updates)
+1. Double-click `Publish Update.bat` after you change the app
+2. Friends install **`Discord-Lite-Setup-….exe` once**
+3. Later publishes update their app automatically on launch
 
-Friends just double-click it — no Node.js or install needed.
+Portable `.exe` is quick to try, but does **not** auto-update. Use the Setup installer for friends.
 
-**Note:** Each copy runs its own local server. People are not automatically in the same chat unless you host a shared server and point everyone at it.
+## Play together over the internet
+1. Host leaves Server address blank and signs in
+2. Host: Settings → Connection → copy **Public tunnel** link
+3. Friends paste that link in Server address → Create Account
+
+## Repo
+https://github.com/AndrewRaney/Discord-app
