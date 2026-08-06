@@ -1,38 +1,93 @@
-HOW TO HOST DISCORD LITE ON YOUR PC
-=====================================
+DISCORD LITE — ALWAYS-ON HOST (SECOND PC)
+==========================================
 
-Right now Discord Lite is hosted on whoever runs it as the "host".
-If you want to host on YOUR computer instead, do this:
+Use a dedicated PC that stays on. It runs the chat server only
+(no Discord Lite window). Everyone else connects as clients.
 
-1) Download the installer (recommended):
+------------------------------------------------
+ONE-TIME SETUP ON THE HOST PC
+------------------------------------------------
+
+1) Install Node.js LTS
+   https://nodejs.org
+   (Restart the PC after installing if "node" is not recognized.)
+
+2) Get the server files
+   Option A — clone the repo:
+     git clone https://github.com/AndrewRaney/Discord-app.git
+     then open the "server" folder inside it
+
+   Option B — copy the whole "server" folder from the developer's PC
+     onto this machine (must include package.json and server.js)
+
+3) Open a terminal in that "server" folder and run once:
+     npm install
+
+4) Double-click:  Start Host.bat
+   Leave the black console window open.
+   Wait until you see "Public tunnel: https://...."
+
+5) On the Desktop, open:
+     Discord-Lite-Host-URL.txt
+   Send that URL to your friends.
+
+6) Double-click:  Install Host Autostart.bat
+   So the host starts again after login/reboot.
+
+7) Power settings — keep the PC awake:
+   Windows Settings → System → Power → Screen and sleep →
+   set Sleep to Never while plugged in.
+
+------------------------------------------------
+EVERYONE ELSE (CLIENTS)
+------------------------------------------------
+
+1) Install Discord Lite Setup from:
    https://github.com/AndrewRaney/Discord-app/releases/latest
 
-   Get:  Discord-Lite-Setup-….exe
-   (Prefer Setup over Portable — Setup can auto-update later.)
+2) Paste the host URL into "Server address"
+   (from Discord-Lite-Host-URL.txt on the host PC)
 
-2) Run the installer and open Discord Lite.
+3) Create Account / Sign in on THAT server.
+   Accounts on an old host do not carry over automatically.
 
-3) On the login screen, leave "Server address" BLANK.
-   Create an account (or sign in). You are now the host.
-   The app runs on your PC and opens a public tunnel link.
+------------------------------------------------
+DAY TO DAY
+------------------------------------------------
 
-4) In the app go to:
-   Settings → Connection
-   Copy the "Public tunnel" link.
+- Host PC: leave on, Start Host running (or autostart).
+- Clients: normal Discord Lite app + the host URL.
+- After the host PC reboots, open Discord-Lite-Host-URL.txt again —
+  the public link can change. Re-share it if friends cannot connect.
+- To stop the host: close the console, or run Stop Host.bat
 
-5) Send that link to your friends.
-   Friends paste it into "Server address", then Create Account
-   on YOUR server (not their own blank/local one).
+------------------------------------------------
+DATA / BACKUPS
+------------------------------------------------
 
-NOTES
-- Keep Discord Lite open while friends are using it.
-- Your PC needs to stay on and connected to the internet.
-- Only one person should host at a time for a shared group of friends.
-- Friends who already have accounts on someone else's host need new
-  accounts on yours (each host has its own user list / chat history).
+Chat history, accounts, and uploads live on the host PC at:
 
-Latest release:
-https://github.com/AndrewRaney/Discord-app/releases/latest
+  %APPDATA%\Discord Lite Host
 
-Repo:
-https://github.com/AndrewRaney/Discord-app
+Back up that folder if you care about keeping messages.
+
+------------------------------------------------
+UPDATING THE HOST
+------------------------------------------------
+
+When the developer updates the server code:
+
+1) Stop Host.bat
+2) Pull / copy the new "server" files
+3) npm install
+4) Start Host.bat again
+5) Re-share Discord-Lite-Host-URL.txt if the tunnel URL changed
+
+Client apps still update via the Setup installer + GitHub Releases.
+
+------------------------------------------------
+LINKS
+------------------------------------------------
+
+Repo:     https://github.com/AndrewRaney/Discord-app
+Releases: https://github.com/AndrewRaney/Discord-app/releases/latest

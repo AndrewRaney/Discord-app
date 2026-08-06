@@ -2,6 +2,7 @@ const { app, BrowserWindow, session, desktopCapturer, ipcMain, dialog } = requir
 const path = require('path');
 const { spawn } = require('child_process');
 const net = require('net');
+const fs = require('fs');
 
 let mainWin = null;
 let pendingScreenCallback = null;
@@ -29,6 +30,26 @@ function getAppRoot() {
   if (app.isPackaged) return path.join(process.resourcesPath, 'app');
   return __dirname;
 }
+
+/** True when URL points at this machine / LAN (should run local backend). */
+function isLocalServerUrl(urlStr) {
+  try {
+    let s = String(urlStr || '').trim();
+    if (!s) return true;
+    if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+    const u = new URL(s);
+    const host = (u.hostname || '').toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    if (/^10\.\d+\.\d+\.\d+$/.test(host)) return true;
+    if (/^192\.168\.\d+\.\d+$/.test(host)) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(host)) return true;
+    return false;
+  } catch (_) {
+    return true;
+  }
+}
+
+let skipLocalBackend = false;
 
 function startBackend() {
   const appRoot = getAppRoot();
@@ -169,7 +190,36 @@ app.whenReady().then(async () => {
     }).catch(() => deny());
   });
 
-  await startBackend();
+  const addressFile = () => path.join(app.getPath('userData'), 'server-address.txt');
+
+  function readServerAddressFile() {
+    try {
+      const f = addressFile();
+      if (fs.existsSync(f)) return fs.readFileSync(f, 'utf8').trim();
+    } catch (_) {}
+    return '';
+  }
+
+  function writeServerAddressFile(url) {
+    try {
+      fs.mkdirSync(app.getPath('userData'), { recursive: true });
+      fs.writeFileSync(addressFile(), String(url || '').trim(), 'utf8');
+    } catch (e) {
+      console.warn('Could not save server-address.txt', e);
+    }
+  }
+
+  ipcMain.handle('get-server-address', () => readServerAddressFile());
+  ipcMain.on('set-server-address', (_e, url) => writeServerAddressFile(url));
+
+  const savedServer = readServerAddressFile();
+  skipLocalBackend = !!(savedServer && !isLocalServerUrl(savedServer));
+  if (skipLocalBackend) {
+    console.log('Client-only mode — remote host:', savedServer);
+  } else {
+    await startBackend();
+  }
+
   createWindow();
   setupAutoUpdates();
 
@@ -192,8 +242,10 @@ function stopBackend() {
 }
 
 app.on('window-all-closed', () => {
-  stopBackend();
+  if (!skipLocalBackend) stopBackend();
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => stopBackend());
+app.on('before-quit', () => {
+  if (!skipLocalBackend) stopBackend();
+});

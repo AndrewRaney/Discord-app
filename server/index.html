@@ -1920,6 +1920,7 @@
           <div>
             <div style="font-size:12px;color:#96989d;margin-bottom:8px">Permissions</div>
             <div style="display:flex;flex-direction:column;gap:6px">
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="sspHoist"> Display role members separately in the member list</label>
               <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="sspManageChannels"> Manage Channels</label>
               <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="sspKickMembers"> Kick Members</label>
               <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="sspBanMembers"> Ban Members</label>
@@ -2366,7 +2367,10 @@
       <div style="display:flex;align-items:center;gap:8px">
         <span style="font-size:13px">🔊</span>
         <input type="range" id="ppVolumeSlider" min="0" max="200" value="100"
-          style="flex:1;accent-color:#5865f2;cursor:pointer" oninput="ppApplyVolume(this.value)">
+          style="flex:1;accent-color:#5865f2;cursor:pointer"
+          oninput="ppApplyVolume(this.value)"
+          onmousedown="event.stopPropagation()"
+          onclick="event.stopPropagation()">
         <span id="ppVolumeLabel" style="font-size:12px;color:#dcddde;min-width:34px;text-align:right">100%</span>
       </div>
     </div>
@@ -2426,6 +2430,7 @@
 
   // Shared API — both people must point at the SAME host to see each other
   let SERVER = getSavedServer();
+  try { window.electronAPI?.setServerAddress?.(SERVER); } catch (_) {}
   let socket = io(SERVER, { transports: ["websocket", "polling"] });
 
   function saveServerAddressFromInput(reloadIfChanged) {
@@ -2433,6 +2438,7 @@
     const next = normalizeServerUrl(el && el.value ? el.value : SERVER);
     const prev = SERVER;
     localStorage.setItem("discordLiteServer", next);
+    try { window.electronAPI?.setServerAddress?.(next); } catch (_) {}
     SERVER = next;
     if (el) el.value = next === "http://localhost:3001" ? "" : next.replace(/^https?:\/\//, "");
     if (reloadIfChanged && next !== prev) {
@@ -2514,7 +2520,11 @@
   const peerConnections = {};
   const STUN = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
   const voiceSocketUsers = {}; // socketId -> username
-  const userVolumes = {};      // username -> 0-200 (100 = normal)
+  let userVolumes = {};      // username -> 0-200 (100 = normal)
+  try {
+    const savedVols = localStorage.getItem("userVolumes_" + (localStorage.getItem("username") || ""));
+    if (savedVols) userVolumes = JSON.parse(savedVols) || {};
+  } catch (_) {}
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -2582,6 +2592,10 @@
     document.getElementById("myAvatar").textContent = username.slice(0, 2).toUpperCase();
     document.getElementById("authSection").classList.add("hidden");
     document.getElementById("chatSection").classList.remove("hidden");
+    try {
+      const savedVols = localStorage.getItem("userVolumes_" + username);
+      if (savedVols) userVolumes = JSON.parse(savedVols) || {};
+    } catch (_) {}
     setInterval(async () => {
       const prev = _lastInviteCount;
       await loadInvites();
@@ -3249,10 +3263,14 @@
     if (!currentMembers.length) { list.innerHTML = ""; return; }
 
     const online = currentMembers.filter(m => m.online);
-    const offline = currentMembers.filter(m => !m.offline && !m.online);
+    const offline = currentMembers.filter(m => !m.online);
     document.getElementById("onlineCount").textContent = online.length;
 
     function memberHTML(m) {
+      const roleLabel = m.customRole
+        ? `<span style="color:${m.customRole.color || '#96989d'}">${escHtml(m.customRole.name)}</span>`
+        : escHtml(m.role || "");
+      const nameColor = m.customRole?.color || "";
       return `
         <div class="member-item" data-un="${escHtml(m.username)}" onclick="openUserProfile(this.dataset.un,event)">
           <div style="position:relative">
@@ -3260,15 +3278,31 @@
             <div class="status-dot ${m.online ? 'online' : 'offline'}"></div>
           </div>
           <div class="member-info">
-            <div class="member-name">${escHtml(m.username)}</div>
-            <div class="member-role">${m.role}</div>
+            <div class="member-name"${nameColor ? ` style="color:${nameColor}"` : ""}>${escHtml(m.username)}</div>
+            <div class="member-role">${roleLabel}</div>
           </div>
         </div>
       `;
     }
 
+    // Group online members under hoisted roles (Discord-style)
+    const hoistedOnline = online.filter(m => m.customRole && m.customRole.hoist);
+    const plainOnline = online.filter(m => !(m.customRole && m.customRole.hoist));
+    const groups = new Map(); // roleId -> { role, members }
+    for (const m of hoistedOnline) {
+      const id = m.customRole.id;
+      if (!groups.has(id)) groups.set(id, { role: m.customRole, members: [] });
+      groups.get(id).members.push(m);
+    }
+    const groupSections = Array.from(groups.values())
+      .sort((a, b) => String(a.role.name).localeCompare(String(b.role.name)))
+      .map(({ role, members }) =>
+        `<div class="member-section-label" style="color:${role.color || '#96989d'}">${escHtml(role.name)} — ${members.length}</div>${members.map(memberHTML).join("")}`
+      ).join("");
+
     list.innerHTML = `
-      ${online.length ? `<div class="member-section-label">Online — ${online.length}</div>${online.map(memberHTML).join("")}` : ""}
+      ${groupSections}
+      ${plainOnline.length ? `<div class="member-section-label">Online — ${plainOnline.length}</div>${plainOnline.map(memberHTML).join("")}` : ""}
       ${offline.length ? `<div class="member-section-label">Offline — ${offline.length}</div>${offline.map(memberHTML).join("")}` : ""}
     `;
   }
@@ -3411,31 +3445,42 @@
       }
     }
 
-    pc.ontrack = ({ streams }) => {
+    pc.ontrack = ({ track, streams }) => {
+      if (track.kind !== "audio") return;
       let audio = document.querySelector(`audio[data-vc="${targetSocketId}"]`);
       if (!audio) {
         audio = document.createElement("audio");
         audio.dataset.vc = targetSocketId;
         audio.autoplay = true;
+        audio.playsInline = true;
         document.body.appendChild(audio);
       }
       audio.srcObject = streams[0];
-      // Boost volume via GainNode to allow amplification above 100%
-      try {
-        const actx = new (window.AudioContext || window.webkitAudioContext)();
-        const src = actx.createMediaElementSource(audio);
-        const gainNode = actx.createGain();
-        src.connect(gainNode);
-        gainNode.connect(actx.destination);
-        audio._gainNode = gainNode;
-        audio._actx = actx;
-      } catch(e) {}
+
+      // Route through Web Audio GainNode so volume can go above 100%
+      if (!audio._gainNode) {
+        try {
+          const actx = new (window.AudioContext || window.webkitAudioContext)();
+          const src = actx.createMediaStreamSource(streams[0]);
+          const gainNode = actx.createGain();
+          src.connect(gainNode);
+          gainNode.connect(actx.destination);
+          audio._gainNode = gainNode;
+          audio._actx = actx;
+          audio._streamSrc = src;
+          // Element is only for track lifecycle; playback is via AudioContext
+          audio.muted = true;
+          if (actx.state === "suspended") actx.resume().catch(() => {});
+        } catch (e) {
+          console.warn("VC gain setup failed:", e);
+          audio.muted = false;
+        }
+      }
+
       const audioUser = voiceSocketUsers[targetSocketId];
       if (audioUser) {
         audio.dataset.vcuser = audioUser;
-        const vol = (userVolumes[audioUser] ?? 100) / 100;
-        if (audio._gainNode) audio._gainNode.gain.value = vol;
-        else audio.volume = Math.min(vol, 1);
+        applyUserVolume(audioUser, userVolumes[audioUser] ?? 100);
       }
     };
 
@@ -3446,10 +3491,73 @@
     return pc;
   }
 
+  function findVcAudioForUser(name) {
+    if (!name) return null;
+    let audio = document.querySelector(`audio[data-vcuser="${CSS.escape(name)}"]`);
+    if (audio) return audio;
+    for (const [sid, uname] of Object.entries(voiceSocketUsers)) {
+      if (uname === name) {
+        audio = document.querySelector(`audio[data-vc="${sid}"]`);
+        if (audio) {
+          audio.dataset.vcuser = name;
+          return audio;
+        }
+      }
+    }
+    return null;
+  }
+
+  function applyUserVolume(name, percent) {
+    if (!name) return;
+    const val = Math.max(0, Math.min(200, parseInt(percent, 10) || 0));
+    userVolumes[name] = val;
+    try { localStorage.setItem("userVolumes_" + username, JSON.stringify(userVolumes)); } catch (_) {}
+
+    const audio = findVcAudioForUser(name);
+    if (!audio) return;
+    const out = (appSettings.outputVolume ?? 100) / 100;
+    const gain = isDeafened ? 0 : out * (val / 100);
+    if (audio._actx && audio._actx.state === "suspended") {
+      audio._actx.resume().catch(() => {});
+    }
+    if (audio._gainNode) {
+      audio._gainNode.gain.value = gain;
+      audio.muted = true; // playback is via AudioContext
+    } else {
+      audio.muted = !!isDeafened;
+      audio.volume = Math.min(out * (val / 100), 1);
+    }
+  }
+
+  function refreshAllVcVolumes() {
+    const seen = new Set();
+    document.querySelectorAll("audio[data-vc]").forEach(a => {
+      const u = a.dataset.vcuser || voiceSocketUsers[a.dataset.vc];
+      if (u && !seen.has(u)) {
+        seen.add(u);
+        applyUserVolume(u, userVolumes[u] ?? 100);
+      } else if (!u && a._gainNode) {
+        a._gainNode.gain.value = isDeafened ? 0 : 1;
+      } else if (!u) {
+        a.muted = !!isDeafened;
+      }
+    });
+  }
+
+  function bindVoiceSocketUser(socketId, uname) {
+    if (!socketId || !uname) return;
+    voiceSocketUsers[socketId] = uname;
+    const audio = document.querySelector(`audio[data-vc="${socketId}"]`);
+    if (audio) {
+      audio.dataset.vcuser = uname;
+      applyUserVolume(uname, userVolumes[uname] ?? 100);
+    }
+  }
+
   // Voice socket events
   socket.on("voice_user_joined", async ({ username: u, socketId }) => {
     if (appSettings.vcSound) playJoinSound();
-    voiceSocketUsers[socketId] = u;
+    bindVoiceSocketUser(socketId, u);
     const pc = await createPeerConnection(socketId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -3461,10 +3569,14 @@
     delete voiceSocketUsers[socketId];
     if (peerConnections[socketId]) { peerConnections[socketId].close(); delete peerConnections[socketId]; }
     const audio = document.querySelector(`audio[data-vc="${socketId}"]`);
-    if (audio) audio.remove();
+    if (audio) {
+      try { if (audio._actx) audio._actx.close(); } catch (_) {}
+      audio.remove();
+    }
   });
 
   socket.on("voice_offer", async ({ offer, from, socketId }) => {
+    bindVoiceSocketUser(socketId, from);
     const pc = await createPeerConnection(socketId);
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
@@ -3937,8 +4049,7 @@
 
   function toggleDeafen() {
     isDeafened = !isDeafened;
-    // Mute all incoming audio
-    document.querySelectorAll("audio[data-vc]").forEach(a => { a.muted = isDeafened; });
+    refreshAllVcVolumes();
     // Also mute mic when deafened
     if (isDeafened && !isMuted) toggleMute();
     if (!isDeafened && isMuted) toggleMute();
@@ -4244,11 +4355,13 @@
     const input = document.getElementById("settingsServerAddress");
     const next = normalizeServerUrl(input && input.value);
     localStorage.setItem("discordLiteServer", next);
+    try { window.electronAPI?.setServerAddress?.(next); } catch (_) {}
     location.reload();
   }
 
   function resetToLocalServer() {
     localStorage.setItem("discordLiteServer", "http://localhost:3001");
+    try { window.electronAPI?.setServerAddress?.("http://localhost:3001"); } catch (_) {}
     location.reload();
   }
 
@@ -4324,10 +4437,14 @@
     } else {
       appSettings.outputVolume = parseInt(val);
       document.getElementById("outputVolumeLabel").textContent = val + "%";
+      // Re-apply per-user gains with new master output level
+      const seen = new Set();
       document.querySelectorAll("audio[data-vc]").forEach(a => {
-        const u = a.dataset.vcuser;
-        const perUser = u ? (userVolumes[u] ?? 100) : 100;
-        a.volume = Math.min((val / 100) * (perUser / 100), 1);
+        const u = a.dataset.vcuser || voiceSocketUsers[a.dataset.vc];
+        if (u && !seen.has(u)) {
+          seen.add(u);
+          applyUserVolume(u, userVolumes[u] ?? 100);
+        }
       });
     }
     saveSettings();
@@ -5154,7 +5271,7 @@
   // Redefine toggleDeafen to use 🔕 instead of 🔇
   window.toggleDeafen = function() {
     isDeafened = !isDeafened;
-    document.querySelectorAll("audio[data-vc]").forEach(a => { a.muted = isDeafened; });
+    refreshAllVcVolumes();
     // Deafening always mutes; undeafening restores unmuted state
     if (isDeafened && !isMuted) toggleMute(true);
     if (!isDeafened && isMuted) toggleMute(true);
@@ -5451,15 +5568,15 @@
   function ppApplyVolume(val) {
     if (!ppTargetUser) return;
     document.getElementById("ppVolumeLabel").textContent = val + "%";
-    // Sync to VC volume menu too
-    userVolumes[ppTargetUser] = parseInt(val);
-    const audio = document.querySelector(`audio[data-vcuser="${ppTargetUser}"]`);
-    if (audio) {
-      const gain = (appSettings.outputVolume / 100) * (val / 100);
-      if (audio._gainNode) audio._gainNode.gain.value = gain;
-      else audio.volume = Math.min(gain, 1);
+    applyUserVolume(ppTargetUser, val);
+    const menuSlider = document.getElementById("vcVolumeSlider");
+    const menuLabel = document.getElementById("vcVolumeLabel");
+    if (menuSlider && vcVolumeTarget === ppTargetUser) {
+      menuSlider.value = val;
+      menuLabel.textContent = val + "%";
     }
   }
+  window.ppApplyVolume = ppApplyVolume;
 
   async function ppSendDm() {
     if (!ppTargetUser) return;
@@ -5882,15 +5999,16 @@
 
   function applyVcVolume(val) {
     if (!vcVolumeTarget) return;
-    userVolumes[vcVolumeTarget] = parseInt(val);
     document.getElementById("vcVolumeLabel").textContent = val + "%";
-    const audio = document.querySelector(`audio[data-vcuser="${vcVolumeTarget}"]`);
-    if (audio) {
-      const gain = (appSettings.outputVolume / 100) * (val / 100);
-      if (audio._gainNode) audio._gainNode.gain.value = gain;
-      else audio.volume = Math.min(gain, 1);
+    applyUserVolume(vcVolumeTarget, val);
+    const ppSlider = document.getElementById("ppVolumeSlider");
+    const ppLabel = document.getElementById("ppVolumeLabel");
+    if (ppSlider && ppTargetUser === vcVolumeTarget) {
+      ppSlider.value = val;
+      ppLabel.textContent = val + "%";
     }
   }
+  window.applyVcVolume = applyVcVolume;
 
   // Close VC volume menu on click outside
   document.addEventListener("click", e => {
@@ -5929,6 +6047,7 @@
     } else {
       list.innerHTML = roles.map(r => {
         const perms = [
+          r.hoist && "Separate list",
           r.canManageChannels && "Manage Channels",
           r.canKickMembers   && "Kick",
           r.canBanMembers    && "Ban",
@@ -5963,6 +6082,7 @@
           s.classList.toggle("selected", s.dataset.color === role.color);
         });
         ssSelectedRoleColor = role.color;
+        document.getElementById("sspHoist").checked            = !!role.hoist;
         document.getElementById("sspManageChannels").checked = !!role.canManageChannels;
         document.getElementById("sspKickMembers").checked    = !!role.canKickMembers;
         document.getElementById("sspBanMembers").checked     = !!role.canBanMembers;
@@ -5981,6 +6101,7 @@
       updatedBy: username,
       name,
       color: ssSelectedRoleColor,
+      hoist: document.getElementById("sspHoist").checked,
       canManageChannels: document.getElementById("sspManageChannels").checked,
       canKickMembers:    document.getElementById("sspKickMembers").checked,
       canBanMembers:     document.getElementById("sspBanMembers").checked,
@@ -6007,6 +6128,7 @@
     document.getElementById("ssRoleName").value = "";
     document.querySelectorAll(".role-color-swatch").forEach((s, i) => s.classList.toggle("selected", i === 0));
     ssSelectedRoleColor = "#5865f2";
+    document.getElementById("sspHoist").checked            = false;
     document.getElementById("sspManageChannels").checked = false;
     document.getElementById("sspKickMembers").checked    = false;
     document.getElementById("sspBanMembers").checked     = false;

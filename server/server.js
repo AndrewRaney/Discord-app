@@ -185,6 +185,7 @@ const ServerRole = sequelize.define("ServerRole", {
   serverId:           { type: DataTypes.INTEGER, allowNull: false },
   name:               { type: DataTypes.STRING,  allowNull: false },
   color:              { type: DataTypes.STRING,  allowNull: false, defaultValue: "#5865f2" },
+  hoist:              { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   canManageChannels:  { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   canKickMembers:     { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   canBanMembers:      { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
@@ -712,10 +713,15 @@ app.get("/server-roles/:serverId", async (req, res) => {
 
 app.post("/create-role", async (req, res) => {
   try {
-    const { serverId, name, color, createdBy, canManageChannels, canKickMembers, canBanMembers, canInviteMembers, canPinMessages, canManageRoles } = req.body;
+    const { serverId, name, color, createdBy, hoist, canManageChannels, canKickMembers, canBanMembers, canInviteMembers, canPinMessages, canManageRoles } = req.body;
     if (!await hasPerm(serverId, createdBy, "canManageRoles"))
       return res.status(403).json({ error: "No permission to manage roles" });
-    const role = await ServerRole.create({ serverId, name: name.trim(), color: color || "#5865f2", canManageChannels: !!canManageChannels, canKickMembers: !!canKickMembers, canBanMembers: !!canBanMembers, canInviteMembers: canInviteMembers !== false, canPinMessages: !!canPinMessages, canManageRoles: !!canManageRoles });
+    const role = await ServerRole.create({
+      serverId, name: name.trim(), color: color || "#5865f2",
+      hoist: !!hoist,
+      canManageChannels: !!canManageChannels, canKickMembers: !!canKickMembers, canBanMembers: !!canBanMembers,
+      canInviteMembers: canInviteMembers !== false, canPinMessages: !!canPinMessages, canManageRoles: !!canManageRoles
+    });
     await emitServerMembers(serverId);
     res.json({ message: "Role created", role });
   } catch { res.status(500).json({ error: "Failed to create role" }); }
@@ -723,11 +729,15 @@ app.post("/create-role", async (req, res) => {
 
 app.post("/update-role", async (req, res) => {
   try {
-    const { roleId, name, color, updatedBy, canManageChannels, canKickMembers, canBanMembers, canInviteMembers, canPinMessages, canManageRoles } = req.body;
+    const { roleId, name, color, updatedBy, hoist, canManageChannels, canKickMembers, canBanMembers, canInviteMembers, canPinMessages, canManageRoles } = req.body;
     const role = await ServerRole.findByPk(roleId);
     if (!role) return res.status(404).json({ error: "Role not found" });
     if (!await hasPerm(role.serverId, updatedBy, "canManageRoles")) return res.status(403).json({ error: "No permission" });
-    Object.assign(role, { name: name.trim(), color, canManageChannels: !!canManageChannels, canKickMembers: !!canKickMembers, canBanMembers: !!canBanMembers, canInviteMembers: canInviteMembers !== false, canPinMessages: !!canPinMessages, canManageRoles: !!canManageRoles });
+    Object.assign(role, {
+      name: name.trim(), color, hoist: !!hoist,
+      canManageChannels: !!canManageChannels, canKickMembers: !!canKickMembers, canBanMembers: !!canBanMembers,
+      canInviteMembers: canInviteMembers !== false, canPinMessages: !!canPinMessages, canManageRoles: !!canManageRoles
+    });
     await role.save();
     await emitServerMembers(role.serverId);
     res.json({ message: "Role updated", role });
@@ -1364,6 +1374,7 @@ async function startPublicTunnel() {
       });
     });
     console.log("Public tunnel:", tunnelUrl);
+    writeHostUrlFile(tunnelUrl);
     return tunnelUrl;
   } catch (err) {
     console.error("Cloudflare tunnel failed, trying localtunnel…", err.message || err);
@@ -1379,6 +1390,7 @@ async function startPublicTunnel() {
         }
       });
       console.log("Public tunnel (localtunnel):", tunnelUrl);
+      writeHostUrlFile(tunnelUrl);
       return tunnelUrl;
     } catch (err2) {
       tunnelError = (err2 && err2.message) || (err && err.message) || "Tunnel failed";
@@ -1387,6 +1399,38 @@ async function startPublicTunnel() {
     }
   } finally {
     tunnelStarting = false;
+  }
+}
+
+function writeHostUrlFile(url) {
+  if (!url) return;
+  const body =
+    "Discord Lite — public host URL\r\n" +
+    "================================\r\n" +
+    "Share this with friends. They paste it as Server address.\r\n" +
+    "\r\n" +
+    url +
+    "\r\n" +
+    "\r\n" +
+    "Note: Cloudflare quick tunnels change after each host restart.\r\n" +
+    "If the host PC reboots, open this file again and re-share the new link.\r\n" +
+    "Updated: " + new Date().toISOString() + "\r\n";
+  const targets = [];
+  try {
+    targets.push(path.join(DATA_DIR, "Discord-Lite-Host-URL.txt"));
+  } catch (_) {}
+  try {
+    const desktop = path.join(os.homedir(), "Desktop");
+    targets.push(path.join(desktop, "Discord-Lite-Host-URL.txt"));
+  } catch (_) {}
+  for (const file of targets) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, body, "utf8");
+      console.log("Host URL written to", file);
+    } catch (e) {
+      console.warn("Could not write host URL file:", file, e.message || e);
+    }
   }
 }
 
