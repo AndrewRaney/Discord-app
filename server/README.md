@@ -15,10 +15,14 @@ Portable `.exe` is quick to try, but does **not** auto-update. Use the Setup ins
 See **[How to Host.txt](./How%20to%20Host.txt)**.
 
 Short version:
-1. On the always-on PC: install Node.js → `npm install` in `server` → run **`Start Host.bat`**
-2. Optionally run **`Install Host Autostart.bat`**
-3. Share **`Desktop\Discord-Lite-Host-URL.txt`** with everyone
-4. Clients paste that URL as Server address (their app skips starting a local server)
+1. Download **`Discord-Lite-Host-….zip`** from [Releases](https://github.com/AndrewRaney/Discord-app/releases/latest)
+2. Unzip → install Node.js → run **`Start Host.bat`**
+3. Optionally **`Install Host Autostart.bat`**
+4. Share **`Desktop\Discord-Lite-Host-URL.txt`**
+5. To keep old accounts/messages: **`Migrate Data to Host.bat`**
+6. Clients paste that URL as Server address
+
+`Publish Update.bat` builds the Setup installer, Portable, and Host zip together.
 
 ## Temporary host from the Discord Lite app
 1. Host leaves Server address blank and signs in

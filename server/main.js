@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, dialog, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const net = require('net');
@@ -7,6 +7,7 @@ const fs = require('fs');
 let mainWin = null;
 let pendingScreenCallback = null;
 let serverProc = null;
+let appTray = null;
 
 function waitForPort(port, host = '127.0.0.1', tries = 40) {
   return new Promise((resolve, reject) => {
@@ -54,7 +55,8 @@ let skipLocalBackend = false;
 function startBackend() {
   const appRoot = getAppRoot();
   const serverJs = path.join(appRoot, 'server.js');
-  const dataDir = app.isPackaged ? app.getPath('userData') : appRoot;
+  const dataDir = process.env.DISCORD_LITE_DATA
+    || (app.isPackaged ? app.getPath('userData') : appRoot);
 
   const cmd = app.isPackaged ? process.execPath : 'node';
   const env = {
@@ -133,12 +135,27 @@ function setupAutoUpdates() {
   }, 5000);
 }
 
+function getAppIconPath() {
+  const candidates = [
+    path.join(__dirname, 'icon.png'),
+    path.join(__dirname, 'build-resources', 'icon.png'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+const isHostMode = process.argv.includes('--host') || process.env.DISCORD_LITE_HOST_MODE === '1';
+
 function createWindow() {
+  const iconPath = getAppIconPath();
   mainWin = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 900,
     minHeight: 600,
+    icon: iconPath || undefined,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -213,20 +230,70 @@ app.whenReady().then(async () => {
   ipcMain.on('set-server-address', (_e, url) => writeServerAddressFile(url));
 
   const savedServer = readServerAddressFile();
-  skipLocalBackend = !!(savedServer && !isLocalServerUrl(savedServer));
+  skipLocalBackend = !isHostMode && !!(savedServer && !isLocalServerUrl(savedServer));
   if (skipLocalBackend) {
     console.log('Client-only mode — remote host:', savedServer);
   } else {
     await startBackend();
   }
 
-  createWindow();
-  setupAutoUpdates();
+  if (isHostMode) {
+    setupHostTray();
+    console.log('Host mode — tray icon active. Backend on port 3001.');
+  } else {
+    createWindow();
+    setupAutoUpdates();
+    setupTray();
+  }
 
   app.on('activate', () => {
+    if (isHostMode) return;
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+
+function setupTray() {
+  try {
+    const iconPath = getAppIconPath();
+    if (!iconPath) return;
+    const img = nativeImage.createFromPath(iconPath);
+    if (img.isEmpty()) return;
+    appTray = new Tray(img.resize({ width: 16, height: 16 }));
+    const label = skipLocalBackend ? 'Discord Lite (client)' : 'Discord Lite';
+    appTray.setToolTip(label);
+    appTray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Open', click: () => { if (mainWin) { mainWin.show(); mainWin.focus(); } } },
+      { label: skipLocalBackend ? 'Mode: remote host' : 'Mode: local server', enabled: false },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() },
+    ]));
+    appTray.on('click', () => { if (mainWin) { mainWin.show(); mainWin.focus(); } });
+  } catch (e) {
+    console.warn('Tray setup failed', e);
+  }
+}
+
+function setupHostTray() {
+  try {
+    const iconPath = getAppIconPath();
+    if (!iconPath) {
+      console.warn('Host tray: icon.png missing');
+      return;
+    }
+    const img = nativeImage.createFromPath(iconPath);
+    if (img.isEmpty()) return;
+    appTray = new Tray(img.resize({ width: 16, height: 16 }));
+    appTray.setToolTip('Discord Lite Host — running');
+    appTray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Host running on port 3001', enabled: false },
+      { label: 'Data: ' + (process.env.DISCORD_LITE_DATA || '(local)'), enabled: false },
+      { type: 'separator' },
+      { label: 'Stop Host', click: () => app.quit() },
+    ]));
+  } catch (e) {
+    console.warn('Host tray setup failed', e);
+  }
+}
 
 function stopBackend() {
   if (serverProc && !serverProc.killed) {
@@ -242,6 +309,7 @@ function stopBackend() {
 }
 
 app.on('window-all-closed', () => {
+  if (isHostMode) return; // tray keeps host alive with no window
   if (!skipLocalBackend) stopBackend();
   if (process.platform !== 'darwin') app.quit();
 });

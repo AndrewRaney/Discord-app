@@ -65,6 +65,7 @@
         "nsis",
         "portable"
       ],
+      "icon": "build-resources/icon.png",
       "artifactName": "Discord-Lite-Setup-${version}.${ext}"
     },
     "portable": {

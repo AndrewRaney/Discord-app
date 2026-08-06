@@ -353,6 +353,12 @@
     }
     .status-dot.online { background: #3ba55c; }
     .status-dot.offline { background: #747f8d; }
+    .status-dot.away { background: #faa61a; }
+    .status-dot.dnd { background: #ed4245; }
+    .member-item .member-activity {
+      font-size: 10px; color: #3ba55c; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; max-width: 120px;
+    }
     .member-item .member-info { flex: 1; min-width: 0; }
     .member-item .member-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .member-item .member-role { font-size: 11px; color: #96989d; }
@@ -1087,7 +1093,16 @@
     input[type="range"] { accent-color: var(--accent); }
 
     /* ── Themes ── */
-    html[data-theme="amoled"] body { background: #000000 !important; }
+    html[data-theme="slate"] body { background: #0f1419 !important; }
+    html[data-theme="slate"] .servers { background: #0a0e12 !important; }
+    html[data-theme="slate"] .sidebar { background: #151b22 !important; }
+    html[data-theme="slate"] .topbar { background: #0f1419 !important; }
+    html[data-theme="slate"] .members-panel { background: #151b22 !important; }
+    html[data-theme="graphite"] body { background: #121212 !important; }
+    html[data-theme="graphite"] .servers { background: #0a0a0a !important; }
+    html[data-theme="graphite"] .sidebar { background: #1a1a1a !important; }
+    html[data-theme="graphite"] .topbar { background: #121212 !important; }
+    html[data-theme="graphite"] .members-panel { background: #1a1a1a !important; }
     html[data-theme="amoled"] .servers { background: #000000 !important; }
     html[data-theme="amoled"] .sidebar { background: #080808 !important; }
     html[data-theme="amoled"] .topbar { background: #000000 !important; box-shadow: 0 1px 0 rgba(255,255,255,0.05) !important; }
@@ -1495,6 +1510,7 @@
     </div>
     <div id="dmHeaderRow" style="display:flex;align-items:center;padding:4px 8px 0;gap:4px">
       <button class="btn-ghost btn-sm" style="font-size:12px;flex:1;text-align:left" onclick="openJoinInvitePrompt()">🔗 Join via invite</button>
+      <button class="btn-ghost btn-sm" style="font-size:12px" onclick="openGroupDmModal()" title="New Group DM">👥＋</button>
     </div>
 
     <div id="channelListWrap" class="channel-list hidden"></div>
@@ -1508,6 +1524,7 @@
         <div class="vc-controls">
           <button class="vc-ctrl-btn" id="muteBtn" onclick="toggleMute()" title="Mute">🎤</button>
           <button class="vc-ctrl-btn" id="deafenBtn" onclick="toggleDeafen()" title="Deafen">🔊</button>
+          <button class="vc-ctrl-btn" id="camBtn" onclick="toggleCamera()" title="Camera">📷</button>
           <button class="vc-ctrl-btn" id="screenShareBtn" onclick="toggleScreenShare()" title="Share Screen">🖥</button>
           <button class="btn-ghost btn-sm" onclick="leaveVoice()">✕</button>
         </div>
@@ -1681,6 +1698,14 @@
       <label><input type="radio" name="chType" value="text" checked> # Text</label>
       <label><input type="radio" name="chType" value="voice"> 🔊 Voice</label>
     </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:12px 0 8px;cursor:pointer">
+      <input type="checkbox" id="newChannelRestricted" onchange="document.getElementById('newChannelRolesWrap').style.display=this.checked?'block':'none'">
+      Private — only selected roles can see / join
+    </label>
+    <div id="newChannelRolesWrap" style="display:none;margin-bottom:8px">
+      <div class="modal-label">Allowed roles</div>
+      <div id="newChannelRoleChecks" style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeModal('createChannelModal')">Cancel</button>
       <button onclick="createChannel()">Create</button>
@@ -1730,6 +1755,21 @@
 </div>
 
 
+<!-- Group DM Modal -->
+<div id="groupDmModal" class="modal-overlay hidden">
+  <div class="modal-box" style="width:420px">
+    <h2>New Group DM</h2>
+    <input id="groupDmName" placeholder="Group name (optional)" style="width:100%;margin-bottom:12px">
+    <div class="modal-label" style="margin-bottom:8px">Select friends</div>
+    <div id="groupDmFriendList" style="max-height:240px;overflow-y:auto;margin-bottom:12px"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModal('groupDmModal')">Cancel</button>
+      <button onclick="createGroupDm()">Create</button>
+    </div>
+  </div>
+</div>
+
+
 <!-- Pinned Messages Modal -->
 <div id="pinnedModal" class="modal-overlay hidden">
   <div class="modal-box" style="width:520px">
@@ -1743,13 +1783,19 @@
 
 <!-- Search Modal -->
 <div id="searchModal" class="modal-overlay hidden">
-  <div class="modal-box" style="width:560px">
+  <div class="modal-box" style="width:600px">
     <h2>🔍 Search Messages</h2>
-    <div style="display:flex;gap:8px;margin-bottom:16px">
+    <div style="display:flex;gap:8px;margin-bottom:10px">
       <input id="searchInput" placeholder="Search in this server..." style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
       <button onclick="doSearch()">Search</button>
     </div>
-    <div id="searchResults"></div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <input id="searchAuthor" placeholder="From user..." style="flex:1;min-width:120px">
+      <select id="searchChannel" style="flex:1;min-width:140px;background:#0e0f11;border:1px solid #252830;color:#dcddde;border-radius:4px;padding:8px">
+        <option value="">All channels</option>
+      </select>
+    </div>
+    <div id="searchResults" style="max-height:360px;overflow-y:auto"></div>
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeModal('searchModal')">Close</button>
     </div>
@@ -2203,6 +2249,33 @@
             <button class="settings-save-btn" id="micTestBtn" onclick="toggleMicTest()" style="margin:0;padding:6px 14px;font-size:12px">Test Mic</button>
           </div>
         </div>
+        <div class="settings-row">
+          <div class="settings-row-label">
+            <div class="label-title">Voice Bitrate</div>
+            <div class="label-desc">Higher = clearer audio, more bandwidth</div>
+          </div>
+          <select id="voiceBitrateSelect" onchange="updateVoiceBitrate(this.value)" style="background:#0e0f11;border:1px solid #252830;color:#dcddde;border-radius:4px;padding:6px 8px">
+            <option value="24000">24 kbps</option>
+            <option value="32000">32 kbps</option>
+            <option value="48000" selected>48 kbps</option>
+            <option value="64000">64 kbps</option>
+            <option value="96000">96 kbps</option>
+            <option value="128000">128 kbps</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">
+            <div class="label-title">VC Idle Timeout</div>
+            <div class="label-desc">Auto-disconnect after silence (0 = off)</div>
+          </div>
+          <select id="vcIdleTimeoutSelect" onchange="updateVcIdleTimeout(this.value)" style="background:#0e0f11;border:1px solid #252830;color:#dcddde;border-radius:4px;padding:6px 8px">
+            <option value="0">Off</option>
+            <option value="5">5 min</option>
+            <option value="10" selected>10 min</option>
+            <option value="15">15 min</option>
+            <option value="30">30 min</option>
+          </select>
+        </div>
       </div>
 
       <div class="settings-group">
@@ -2338,14 +2411,20 @@
   <video id="screenVideo" autoplay playsinline></video>
 </div>
 
-<!-- VC User Volume Context Menu -->
-<div id="vcVolumeMenu" style="display:none;position:fixed;z-index:9999;background:#141517;border:1px solid #252830;border-radius:8px;padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,0.6);min-width:180px">
+<!-- VC User Context Menu -->
+<div id="vcVolumeMenu" style="display:none;position:fixed;z-index:9999;background:#141517;border:1px solid #252830;border-radius:8px;padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,0.6);min-width:200px">
   <div id="vcVolumeMenuName" style="font-size:12px;font-weight:600;color:#96989d;margin-bottom:8px"></div>
-  <div style="display:flex;align-items:center;gap:8px">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
     <span style="font-size:13px">🔊</span>
     <input type="range" id="vcVolumeSlider" min="0" max="200" value="100"
       style="flex:1;accent-color:#5865f2;cursor:pointer" oninput="applyVcVolume(this.value)">
     <span id="vcVolumeLabel" style="font-size:12px;color:#dcddde;min-width:34px;text-align:right">100%</span>
+  </div>
+  <div id="vcModActions" style="display:none;flex-direction:column;gap:6px;border-top:1px solid #252830;padding-top:10px">
+    <button class="btn-sm" style="width:100%" onclick="modServerMute(true)">Server Mute</button>
+    <button class="btn-sm" style="width:100%" onclick="modServerMute(false)">Clear Server Mute</button>
+    <button class="btn-sm" style="width:100%;background:#faa61a;color:#111" onclick="modServerDeafen(true)">Server Deafen</button>
+    <button class="btn-sm" style="width:100%" onclick="modServerDeafen(false)">Clear Server Deafen</button>
   </div>
 </div>
 
@@ -2515,6 +2594,8 @@
   let inVoiceChannel = false;
   let isMuted = false;
   let isDeafened = false;
+  let isServerMuted = false;
+  let isServerDeafened = false;
   let currentVoiceChannelId = null;
   let localStream = null;
   const peerConnections = {};
@@ -2764,11 +2845,13 @@
     // DM home button
     const home = document.createElement("div");
     home.className = "server-icon" + (!currentServerId ? " active" : "");
-    home.textContent = "💬";
     home.style.fontSize = "20px";
+    home.style.position = "relative";
     home.title = "Direct Messages";
     home.onclick = () => openDmView();
+    home.innerHTML = `💬<span id="dmHomeBadge" class="ch-unread-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;font-size:10px;line-height:16px;padding:0 4px">0</span>`;
     list.appendChild(home);
+    updateDmHomeBadge();
 
     const div = document.createElement("div");
     div.className = "server-divider";
@@ -2777,11 +2860,34 @@
     myServers.forEach(s => {
       const el = document.createElement("div");
       el.className = "server-icon" + (s.id === currentServerId ? " active" : "");
-      el.textContent = s.name.slice(0, 2).toUpperCase();
+      if (s.iconUrl) {
+        el.innerHTML = `<img src="${SERVER}${s.iconUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`;
+      } else {
+        el.textContent = s.name.slice(0, 2).toUpperCase();
+      }
       el.title = s.name;
       el.onclick = () => openServer(s.id, s.name);
       list.appendChild(el);
     });
+  }
+
+  let dmUnread = {};
+  try { dmUnread = JSON.parse(localStorage.getItem("dmUnread_" + (localStorage.getItem("username") || "")) || "{}"); } catch (_) {}
+
+  function saveDmUnread() {
+    try { localStorage.setItem("dmUnread_" + username, JSON.stringify(dmUnread)); } catch (_) {}
+  }
+
+  function updateDmHomeBadge() {
+    const badge = document.getElementById("dmHomeBadge");
+    if (!badge) return;
+    const total = Object.values(dmUnread).reduce((a, b) => a + (b || 0), 0);
+    if (total > 0) {
+      badge.style.display = "inline-block";
+      badge.textContent = total > 99 ? "99+" : total;
+    } else {
+      badge.style.display = "none";
+    }
   }
 
   async function openServer(serverId, serverName) {
@@ -2991,28 +3097,110 @@
       return;
     }
     wrap.innerHTML = dmThreads.map(t => {
-      const other = t.user1 === username ? t.user2 : t.user1;
+      const isGroup = !!t.isGroup;
+      const others = (t.members || [t.user1, t.user2].filter(Boolean)).filter(m => m !== username);
+      const other = isGroup ? null : (others[0] || (t.user1 === username ? t.user2 : t.user1));
+      const label = isGroup ? (t.displayName || t.name || others.join(", ") || "Group") : other;
       const key = t.dmKey;
       const isOnline = !!t.isOnline;
-      const memberInfo = currentMembers.find(m => m.username === other);
+      const memberInfo = !isGroup ? currentMembers.find(m => m.username === other) : null;
       const avatarUrl = memberInfo?.avatarUrl;
-      const avatarColor = memberInfo?.avatarColor || "#5865f2";
+      const avatarColor = isGroup ? "#3ba55c" : (memberInfo?.avatarColor || "#5865f2");
       const previewText = t.lastMessage ? `${t.lastMessageBy === username ? "You: " : ""}${t.lastMessage.slice(0, 40)}` : "Click to open";
       const preview = escHtml(previewText);
       const avatarInner = avatarUrl
         ? `<img src="${avatarUrl}" onerror="this.style.display='none'">`
-        : `<span>${other.slice(0,2).toUpperCase()}</span>`;
-      return `<div class="dm-item ${currentDmKey === key ? 'active' : ''}" onclick="openDM('${other}')">
+        : `<span>${escHtml(String(label || "?").slice(0, 2).toUpperCase())}</span>`;
+      const click = isGroup
+        ? `openGroupDM('${escHtml(key)}')`
+        : `openDM('${escHtml(other)}')`;
+      return `<div class="dm-item ${currentDmKey === key ? 'active' : ''}" onclick="${click}">
         <div class="avatar" style="background:${avatarColor}">
           ${avatarInner}
           ${isOnline ? '<div class="dm-status-dot"></div>' : ''}
         </div>
         <div class="dm-info">
-          <div class="dm-name">${escHtml(other)}</div>
+          <div class="dm-name">${isGroup ? "👥 " : ""}${escHtml(label || "")}${(dmUnread[key] || 0) > 0 ? ` <span class="ch-unread-badge">${dmUnread[key]}</span>` : ""}</div>
           <div class="dm-preview">${preview}</div>
         </div>
       </div>`;
     }).join("");
+  }
+
+  async function openGroupDmModal() {
+    await loadFriendsSilent();
+    const list = document.getElementById("groupDmFriendList");
+    if (!friendsList.length) {
+      list.innerHTML = `<div style="font-size:13px;color:#96989d">Add friends first, then create a group.</div>`;
+    } else {
+      list.innerHTML = friendsList.map(f => `
+        <label style="display:flex;align-items:center;gap:10px;padding:8px;border-radius:6px;cursor:pointer" onmouseenter="this.style.background='#1d2024'" onmouseleave="this.style.background='transparent'">
+          <input type="checkbox" class="group-dm-friend" value="${escHtml(f.username)}">
+          <span style="color:#dcddde;font-size:14px">${escHtml(f.username)}</span>
+          <span style="margin-left:auto;font-size:11px;color:${f.online ? '#3ba55c' : '#747f8d'}">${f.online ? 'Online' : 'Offline'}</span>
+        </label>
+      `).join("");
+    }
+    document.getElementById("groupDmName").value = "";
+    document.getElementById("groupDmModal").classList.remove("hidden");
+  }
+
+  async function createGroupDm() {
+    const members = [...document.querySelectorAll(".group-dm-friend:checked")].map(el => el.value);
+    const name = document.getElementById("groupDmName").value.trim();
+    if (!members.length) return alert("Select at least one friend");
+    const res = await fetch(`${SERVER}/group-dm`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, members, name })
+    });
+    const data = await res.json();
+    if (!data.thread) return alert(data.error || "Failed to create group");
+    closeModal("groupDmModal");
+    await openGroupDM(data.thread.dmKey);
+  }
+
+  async function openGroupDM(dmKey) {
+    const res = await fetch(`${SERVER}/dm-thread/${encodeURIComponent(dmKey)}`);
+    const thread = await res.json();
+    if (!thread || thread.error) return alert(thread.error || "Group not found");
+    currentDmKey = thread.dmKey;
+    currentDmTarget = "";
+    currentServerId = null;
+    currentChannelId = null;
+    currentChannelType = "text";
+    if (dmUnread[currentDmKey]) {
+      delete dmUnread[currentDmKey];
+      saveDmUnread();
+      updateDmHomeBadge();
+    }
+    const members = thread.members || [];
+    const others = members.filter(m => m !== username);
+    const title = thread.name || others.join(", ") || "Group";
+    document.getElementById("serverTitle").textContent = title;
+    document.getElementById("topbarPrefix").textContent = "👥";
+    document.getElementById("messageInput").placeholder = `Message ${title}`;
+    document.getElementById("messageInput").disabled = false;
+    document.getElementById("channelListWrap").classList.add("hidden");
+    document.getElementById("dmListWrap").classList.remove("hidden");
+    document.getElementById("dmHeaderRow").style.display = "flex";
+    const ssBtn2 = document.getElementById("serverSettingsBtn");
+    if (ssBtn2) ssBtn2.classList.add("hidden");
+    ["dmCallBtn","dmVideoCallBtn"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.classList.add("hidden");
+    });
+    document.getElementById("memberList").innerHTML = members.map(m => {
+      const online = friendsList.find(f => f.username === m)?.online;
+      return `<div class="member-row" style="padding:6px 12px;display:flex;align-items:center;gap:8px">
+        <span style="width:8px;height:8px;border-radius:50%;background:${online ? '#3ba55c' : '#747f8d'}"></span>
+        <span style="color:#dcddde;font-size:13px">${escHtml(m)}</span>
+      </div>`;
+    }).join("");
+    document.getElementById("onlineCount").textContent = String(members.length);
+
+    socket.emit("join_dm", { dmKey: currentDmKey, username });
+    await loadDmThreads();
+    renderServerIcons();
   }
 
   async function openDM(targetUsername) {
@@ -3028,6 +3216,11 @@
     currentServerId = null;
     currentChannelId = null;
     currentChannelType = "text";
+    if (dmUnread[currentDmKey]) {
+      delete dmUnread[currentDmKey];
+      saveDmUnread();
+      updateDmHomeBadge();
+    }
 
     document.getElementById("serverTitle").textContent = targetUsername;
     document.getElementById("topbarPrefix").textContent = "💬";
@@ -3050,19 +3243,21 @@
     const name = typeof u === "object" ? u.username : u;
     const muted = typeof u === "object" ? u.muted : false;
     const deafened = typeof u === "object" ? u.deafened : false;
+    const serverMuted = typeof u === "object" ? u.serverMuted : false;
+    const serverDeafened = typeof u === "object" ? u.serverDeafened : false;
     const mem = currentMembers.find(m => m.username === name) || {};
     const av = mem.avatarUrl
       ? `<img class="vc-av" src="${SERVER}${mem.avatarUrl}" style="width:20px;height:20px;">`
       : `<div class="vc-av" style="background:${mem.avatarColor||'#5865f2'}">${escHtml(name[0].toUpperCase())}</div>`;
-    const icons = deafened
-      ? `<div class="vc-icons"><span class="vc-icon-deafened" title="Deafened">🔕</span></div>`
-      : (muted ? `<div class="vc-icons"><span class="vc-icon-muted" title="Muted">🔇</span></div>` : "");
+    let icons = "";
+    if (serverDeafened || deafened) icons = `<div class="vc-icons"><span class="vc-icon-deafened" title="${serverDeafened ? 'Server deafened' : 'Deafened'}">${serverDeafened ? '🔕⚡' : '🔕'}</span></div>`;
+    else if (serverMuted || muted) icons = `<div class="vc-icons"><span class="vc-icon-muted" title="${serverMuted ? 'Server muted' : 'Muted'}">${serverMuted ? '🔇⚡' : '🔇'}</span></div>`;
     const speakingCls = speakingUsers.has(name) ? " speaking" : "";
     return `<div class="vc-user-entry${speakingCls}" data-vcname="${escHtml(name)}" onclick="openUserProfile(this.dataset.vcname,event)" oncontextmenu="openVcVolumeMenu(event,this.dataset.vcname)">${av}<span>${escHtml(name)}</span>${icons}</div>`;
   }
 
   async function loadChannels() {
-    const res = await fetch(`${SERVER}/channels/${currentServerId}`);
+    const res = await fetch(`${SERVER}/channels/${currentServerId}?username=${encodeURIComponent(username)}`);
     channels = await res.json();
     renderChannels();
     // Auto-open first text channel if none selected
@@ -3120,9 +3315,22 @@
     socket.emit("join_channel", { channelId, serverId: currentServerId });
   }
 
-  function openCreateChannelModal(defaultType) {
+  async function openCreateChannelModal(defaultType) {
     document.getElementById("newChannelInput").value = "";
     document.querySelector(`input[name="chType"][value="${defaultType}"]`).checked = true;
+    document.getElementById("newChannelRestricted").checked = false;
+    document.getElementById("newChannelRolesWrap").style.display = "none";
+    const wrap = document.getElementById("newChannelRoleChecks");
+    wrap.innerHTML = `<p style="color:#96989d;font-size:12px">Loading roles…</p>`;
+    try {
+      const rr = await fetch(`${SERVER}/server-roles/${currentServerId}`);
+      const roles = await rr.json();
+      wrap.innerHTML = roles.length
+        ? roles.map(r => `<label style="font-size:13px;cursor:pointer"><input type="checkbox" class="new-ch-role" value="${r.id}"> <span style="color:${r.color}">${escHtml(r.name)}</span></label>`).join("")
+        : `<p style="color:#96989d;font-size:12px">No custom roles — create some in Server Settings first.</p>`;
+    } catch {
+      wrap.innerHTML = "";
+    }
     document.getElementById("createChannelModal").classList.remove("hidden");
   }
 
@@ -3130,9 +3338,11 @@
     const name = document.getElementById("newChannelInput").value.trim();
     const type = document.querySelector('input[name="chType"]:checked').value;
     if (!name) return alert("Enter a channel name");
+    const restricted = document.getElementById("newChannelRestricted").checked;
+    const allowRoleIds = [...document.querySelectorAll(".new-ch-role:checked")].map(el => parseInt(el.value, 10));
     const res = await fetch(`${SERVER}/create-channel`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ serverId: currentServerId, name, type, username })
+      body: JSON.stringify({ serverId: currentServerId, name, type, username, restricted, allowRoleIds })
     });
     const data = await res.json();
     if (data.channel) {
@@ -3262,40 +3472,51 @@
     const list = document.getElementById("memberList");
     if (!currentMembers.length) { list.innerHTML = ""; return; }
 
-    const online = currentMembers.filter(m => m.online);
-    const offline = currentMembers.filter(m => !m.online);
+    const online = currentMembers.filter(m => m.online && m.status !== "invisible");
+    const offline = currentMembers.filter(m => !m.online || m.status === "invisible");
     document.getElementById("onlineCount").textContent = online.length;
+
+    function statusDotClass(m) {
+      if (!m.online || m.status === "invisible") return "offline";
+      if (m.status === "away") return "away";
+      if (m.status === "dnd") return "dnd";
+      return "online";
+    }
 
     function memberHTML(m) {
       const roleLabel = m.customRole
         ? `<span style="color:${m.customRole.color || '#96989d'}">${escHtml(m.customRole.name)}</span>`
         : escHtml(m.role || "");
       const nameColor = m.customRole?.color || "";
+      const activity = m.nowPlaying
+        ? `<div class="member-activity" title="Now playing">🎮 ${escHtml(m.nowPlaying)}</div>`
+        : "";
       return `
-        <div class="member-item" data-un="${escHtml(m.username)}" onclick="openUserProfile(this.dataset.un,event)">
+        <div class="member-item" data-un="${escHtml(m.username)}" data-member="${escHtml(m.username)}" onclick="openUserProfile(this.dataset.un,event)">
           <div style="position:relative">
             ${avatar(m.username, m.avatarColor || "#5865f2", 32, m.avatarUrl || "")}
-            <div class="status-dot ${m.online ? 'online' : 'offline'}"></div>
+            <div class="status-dot ${statusDotClass(m)}"></div>
           </div>
           <div class="member-info">
             <div class="member-name"${nameColor ? ` style="color:${nameColor}"` : ""}>${escHtml(m.username)}</div>
             <div class="member-role">${roleLabel}</div>
+            ${activity}
           </div>
         </div>
       `;
     }
 
-    // Group online members under hoisted roles (Discord-style)
+    // Group online members under hoisted roles (higher position first)
     const hoistedOnline = online.filter(m => m.customRole && m.customRole.hoist);
     const plainOnline = online.filter(m => !(m.customRole && m.customRole.hoist));
-    const groups = new Map(); // roleId -> { role, members }
+    const groups = new Map();
     for (const m of hoistedOnline) {
       const id = m.customRole.id;
       if (!groups.has(id)) groups.set(id, { role: m.customRole, members: [] });
       groups.get(id).members.push(m);
     }
     const groupSections = Array.from(groups.values())
-      .sort((a, b) => String(a.role.name).localeCompare(String(b.role.name)))
+      .sort((a, b) => (b.role.position || 0) - (a.role.position || 0) || String(a.role.name).localeCompare(String(b.role.name)))
       .map(({ role, members }) =>
         `<div class="member-section-label" style="color:${role.color || '#96989d'}">${escHtml(role.name)} — ${members.length}</div>${members.map(memberHTML).join("")}`
       ).join("");
@@ -3406,6 +3627,8 @@
 
     playJoinSound();
     startSpeakingDetection(localStream);
+    startVcIdleWatcher();
+    applyVoiceBitrateToPeers();
     socket.emit("join_voice", { channelId, username });
   }
 
@@ -3416,12 +3639,16 @@
     Object.values(peerConnections).forEach(pc => pc.close());
     Object.keys(peerConnections).forEach(k => delete peerConnections[k]);
     stopSpeakingDetection();
+    stopVcIdleWatcher();
+    stopCamera();
+    if (isScreenSharing) stopScreenShare();
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
     document.querySelectorAll('audio[data-vc]').forEach(a => a.remove());
+    document.querySelectorAll('video[data-vc-video]').forEach(v => v.remove());
     inVoiceChannel = false;
     currentVoiceChannelId = null;
     currentChannelId = null;
-    isMuted = false; isDeafened = false;
+    isMuted = false; isDeafened = false; isServerMuted = false; isServerDeafened = false;
     const mb = document.getElementById("muteBtn");
     const db = document.getElementById("deafenBtn");
     if (mb) { mb.textContent = "🎤"; mb.classList.remove("muted", "locked"); }
@@ -3431,21 +3658,44 @@
   }
 
   async function createPeerConnection(targetSocketId) {
+    if (peerConnections[targetSocketId]) {
+      try { peerConnections[targetSocketId].close(); } catch (_) {}
+      delete peerConnections[targetSocketId];
+    }
     const pc = new RTCPeerConnection(STUN);
     peerConnections[targetSocketId] = pc;
 
     const streamToSend = processedStream || localStream;
     if (streamToSend) {
       if (processedStream) {
-        // Add processed (noise-gated) audio + raw video tracks
         processedStream.getAudioTracks().forEach(t => pc.addTrack(t, processedStream));
         if (localStream) localStream.getVideoTracks().forEach(t => pc.addTrack(t, localStream));
       } else {
         localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
       }
     }
+    if (isCamOn && camStream) {
+      camStream.getVideoTracks().forEach(t => {
+        try { pc.addTrack(t, camStream); } catch (_) {}
+      });
+    }
+    setTimeout(() => applyVoiceBitrateToPeers(), 400);
 
     pc.ontrack = ({ track, streams }) => {
+      if (track.kind === "video") {
+        let vid = document.querySelector(`video[data-vc-video="${targetSocketId}"]`);
+        if (!vid) {
+          vid = document.createElement("video");
+          vid.dataset.vcVideo = targetSocketId;
+          vid.autoplay = true;
+          vid.playsInline = true;
+          vid.style.cssText = "position:fixed;bottom:80px;left:16px;width:180px;border-radius:8px;z-index:50;border:2px solid #3ba55c;background:#000";
+          document.body.appendChild(vid);
+        }
+        vid.srcObject = streams[0];
+        track.onended = () => { try { vid.remove(); } catch (_) {} };
+        return;
+      }
       if (track.kind !== "audio") return;
       let audio = document.querySelector(`audio[data-vc="${targetSocketId}"]`);
       if (!audio) {
@@ -3573,11 +3823,14 @@
       try { if (audio._actx) audio._actx.close(); } catch (_) {}
       audio.remove();
     }
+    const vid = document.querySelector(`video[data-vc-video="${socketId}"]`);
+    if (vid) vid.remove();
   });
 
   socket.on("voice_offer", async ({ offer, from, socketId }) => {
     bindVoiceSocketUser(socketId, from);
-    const pc = await createPeerConnection(socketId);
+    let pc = peerConnections[socketId];
+    if (!pc) pc = await createPeerConnection(socketId);
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -3824,6 +4077,11 @@
     await openDM(targetUser);
   }
 
+  socket.on("group_dm_created", async () => {
+    await loadDmThreads();
+    showToast("Added to a group DM", "success");
+  });
+
 
   // ── Notifications ─────────────────────────────────────────────────────────
 
@@ -3901,12 +4159,16 @@
     dot.onclick = () => {
       dot.style.display = "none";
       if (data?.dmKey) {
-        const thread = dmThreads.find(t => t.dmKey === data.dmKey);
-        const other = thread
-          ? (thread.user1 === username ? thread.user2 : thread.user1)
-          : data.username;
         openDmView();
-        openDM(other);
+        const thread = dmThreads.find(t => t.dmKey === data.dmKey);
+        if (thread?.isGroup || String(data.dmKey).startsWith("g:")) {
+          openGroupDM(data.dmKey);
+        } else {
+          const other = thread
+            ? (thread.user1 === username ? thread.user2 : thread.user1)
+            : data.username;
+          openDM(other);
+        }
       } else if (data?.channelId && data?.serverId && data.serverId !== currentServerId) {
         const srv = myServers.find(s => s.id === data.serverId);
         if (srv) openServer(srv.id, srv.name).then(() => {
@@ -3961,6 +4223,12 @@
       saveUnread();
       try { renderChannels(); } catch (_) {}
     }
+    if (data.dmKey && data.dmKey !== currentDmKey) {
+      dmUnread[data.dmKey] = (dmUnread[data.dmKey] || 0) + 1;
+      saveDmUnread();
+      updateDmHomeBadge();
+      try { renderDmList(); } catch (_) {}
+    }
   });
 
   // ── File Sharing ──────────────────────────────────────────────────────────
@@ -3968,6 +4236,37 @@
   document.addEventListener("DOMContentLoaded", () => {
     requestNotifPermission();
     document.getElementById("fileInput").addEventListener("change", handleFileSelect);
+    const msgInput = document.getElementById("messageInput");
+    if (msgInput) {
+      msgInput.addEventListener("paste", async (e) => {
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (const item of items) {
+          if (item.type && item.type.startsWith("image/")) {
+            e.preventDefault();
+            const file = item.getAsFile();
+            if (!file) return;
+            if (!currentChannelId && !currentDmKey) return showToast("Select a channel or DM first", "error");
+            const formData = new FormData();
+            formData.append("file", file, "paste.png");
+            try {
+              const res = await fetch(`${SERVER}/upload`, { method: "POST", body: formData });
+              const data = await res.json();
+              if (data.url) {
+                socket.emit("send_message", {
+                  channelId: currentChannelId,
+                  dmKey: currentDmKey,
+                  username,
+                  message: `[FILE:${data.url}:${data.originalName || "paste.png"}:${data.mimetype || file.type}]`
+                });
+                showToast("Image pasted", "success");
+              } else showToast(data.error || "Paste upload failed", "error");
+            } catch { showToast("Paste upload failed", "error"); }
+            return;
+          }
+        }
+      });
+    }
   });
 
   async function handleFileSelect(e) {
@@ -4034,17 +4333,23 @@
   // ── Mute / Deafen ─────────────────────────────────────────────────────────
 
   function toggleMute(silent = false) {
-    // Can't unmute while deafened
-    if (isDeafened && !silent) return;
+    // Can't unmute while deafened or server-muted
+    if ((isDeafened || isServerDeafened) && !silent) return;
+    if (isServerMuted && isMuted && !silent) {
+      showToast("You are server muted", "error");
+      return;
+    }
     isMuted = !isMuted;
+    if (isServerMuted) isMuted = true;
     if (localStream) {
       localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
     }
     const btn = document.getElementById("muteBtn");
     btn.textContent = isMuted ? "🔇" : "🎤";
     btn.classList.toggle("muted", isMuted);
+    btn.classList.toggle("locked", isServerMuted || isServerDeafened);
     if (!silent) { isMuted ? playMuteSound() : playUnmuteSound(); }
-    if (inVoiceChannel) socket.emit("voice_mute_state", { channelId: currentVoiceChannelId, username, muted: isMuted, deafened: isDeafened });
+    if (inVoiceChannel) socket.emit("voice_mute_state", { channelId: currentVoiceChannelId, username, muted: isMuted, deafened: isDeafened || isServerDeafened });
   }
 
   function toggleDeafen() {
@@ -4170,6 +4475,8 @@
     autoGainControl: true,
     noiseGate: false,
     noiseGateThreshold: 15,
+    voiceBitrate: 48000,
+    vcIdleTimeout: 10,
     theme: 'dark',
     accentColor: '#5865f2',
   };
@@ -4231,6 +4538,11 @@
     document.getElementById("inputVolumeLabel").textContent = appSettings.inputVolume + "%";
     document.getElementById("outputVolume").value = appSettings.outputVolume;
     document.getElementById("outputVolumeLabel").textContent = appSettings.outputVolume + "%";
+
+    const br = document.getElementById("voiceBitrateSelect");
+    if (br) br.value = String(appSettings.voiceBitrate || 48000);
+    const idle = document.getElementById("vcIdleTimeoutSelect");
+    if (idle) idle.value = String(appSettings.vcIdleTimeout ?? 10);
 
     // Keybinds
     document.getElementById("pttKeybind").textContent = appSettings.pttKey || "Not set";
@@ -4973,7 +5285,13 @@
   // ── Feature 8: Message Search ────────────────────────────────────────────
   function openSearchModal() {
     document.getElementById("searchInput").value = "";
+    document.getElementById("searchAuthor").value = "";
     document.getElementById("searchResults").innerHTML = "";
+    const sel = document.getElementById("searchChannel");
+    sel.innerHTML = `<option value="">All channels</option>` +
+      channels.filter(c => c.type === "text").map(c =>
+        `<option value="${c.id}">#${escHtml(c.name)}</option>`
+      ).join("");
     document.getElementById("searchModal").classList.remove("hidden");
     setTimeout(() => document.getElementById("searchInput").focus(), 50);
   }
@@ -4981,7 +5299,12 @@
   async function doSearch() {
     const query = document.getElementById("searchInput").value.trim();
     if (!query || !currentServerId) return;
-    const res = await fetch(`${SERVER}/search-messages?serverId=${currentServerId}&query=${encodeURIComponent(query)}`);
+    const author = document.getElementById("searchAuthor").value.trim();
+    const channelId = document.getElementById("searchChannel").value;
+    let url = `${SERVER}/search-messages?serverId=${currentServerId}&query=${encodeURIComponent(query)}`;
+    if (author) url += `&author=${encodeURIComponent(author)}`;
+    if (channelId) url += `&channelId=${encodeURIComponent(channelId)}`;
+    const res = await fetch(url);
     const results = await res.json();
     const container = document.getElementById("searchResults");
     if (!results.length) {
@@ -4989,11 +5312,12 @@
       return;
     }
     const esc = escHtml;
-    const highlight = (text) => text.replace(new RegExp(esc(query), "gi"), m => `<span class="sr-highlight">${m}</span>`);
+    const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const highlight = (text) => esc(text).replace(re, m => `<span class="sr-highlight">${m}</span>`);
     container.innerHTML = results.map(r => `
       <div class="search-result-item" onclick="jumpToSearchResult(${r.channelId}, '${esc(r.channelName)}', ${r.id})">
-        <div class="sr-meta">#${esc(r.channelName)} &bull; ${esc(r.username)} &bull; ${new Date(r.createdAt).toLocaleString()}</div>
-        <div class="sr-text">${highlight(esc(r.message.slice(0, 120)))}</div>
+        <div class="sr-meta">#${esc(r.channelName)} &bull; <strong>${esc(r.username)}</strong> &bull; ${new Date(r.createdAt).toLocaleString()}</div>
+        <div class="sr-text">${highlight(r.message.slice(0, 160))}</div>
       </div>
     `).join("");
   }
@@ -5131,6 +5455,130 @@
     else startScreenShare();
   }
 
+  // ── Camera in voice ───────────────────────────────────────────────────────
+  let isCamOn = false;
+  let camStream = null;
+
+  async function toggleCamera() {
+    if (!inVoiceChannel) return showToast("Join a voice channel first", "error");
+    if (isCamOn) {
+      stopCamera();
+      return;
+    }
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    } catch {
+      return showToast("Camera access denied", "error");
+    }
+    isCamOn = true;
+    document.getElementById("camBtn")?.classList.add("muted");
+    const track = camStream.getVideoTracks()[0];
+    Object.values(peerConnections).forEach(pc => {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
+      if (sender) sender.replaceTrack(track).catch(() => {});
+      else {
+        try { pc.addTrack(track, camStream); } catch (_) {}
+      }
+    });
+    showLocalCamPreview(camStream);
+    track.onended = () => stopCamera();
+    bumpVcActivity();
+    await renegotiateVoicePeers();
+  }
+
+  function stopCamera() {
+    const endingTracks = camStream ? new Set(camStream.getTracks()) : new Set();
+    if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+    isCamOn = false;
+    document.getElementById("camBtn")?.classList.remove("muted");
+    hideLocalCamPreview();
+    Object.entries(peerConnections).forEach(([sid, pc]) => {
+      pc.getSenders().filter(s => s.track && s.track.kind === "video" && (endingTracks.has(s.track) || s.track.readyState === "ended")).forEach(s => {
+        try { pc.removeTrack(s); } catch (_) {}
+      });
+    });
+    renegotiateVoicePeers().catch(() => {});
+  }
+
+  async function renegotiateVoicePeers() {
+    for (const [socketId, pc] of Object.entries(peerConnections)) {
+      try {
+        if (pc.signalingState === "closed") continue;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("voice_offer", { targetSocketId: socketId, offer, from: username });
+      } catch (_) {}
+    }
+  }
+
+  function showLocalCamPreview(stream) {
+    let el = document.getElementById("localCamPreview");
+    if (!el) {
+      el = document.createElement("video");
+      el.id = "localCamPreview";
+      el.autoplay = true;
+      el.muted = true;
+      el.playsInline = true;
+      el.style.cssText = "position:fixed;bottom:80px;right:16px;width:180px;border-radius:8px;z-index:50;border:2px solid #5865f2;background:#000";
+      document.body.appendChild(el);
+    }
+    el.srcObject = stream;
+    el.style.display = "block";
+  }
+  function hideLocalCamPreview() {
+    const el = document.getElementById("localCamPreview");
+    if (el) { el.srcObject = null; el.style.display = "none"; }
+  }
+  window.toggleCamera = toggleCamera;
+
+  // ── VC idle timeout + bitrate ─────────────────────────────────────────────
+  let vcLastActivity = Date.now();
+  let vcIdleTimer = null;
+
+  function bumpVcActivity() { vcLastActivity = Date.now(); }
+
+  function startVcIdleWatcher() {
+    stopVcIdleWatcher();
+    vcLastActivity = Date.now();
+    vcIdleTimer = setInterval(() => {
+      const mins = appSettings.vcIdleTimeout || 0;
+      if (!mins || !inVoiceChannel) return;
+      if (Date.now() - vcLastActivity > mins * 60 * 1000) {
+        showToast(`Disconnected from voice (idle ${mins}m)`, "error");
+        leaveVoice();
+      }
+    }, 15000);
+  }
+  function stopVcIdleWatcher() {
+    if (vcIdleTimer) { clearInterval(vcIdleTimer); vcIdleTimer = null; }
+  }
+
+  function updateVoiceBitrate(val) {
+    appSettings.voiceBitrate = parseInt(val, 10) || 48000;
+    saveSettings();
+    applyVoiceBitrateToPeers();
+  }
+  function updateVcIdleTimeout(val) {
+    appSettings.vcIdleTimeout = parseInt(val, 10) || 0;
+    saveSettings();
+  }
+  window.updateVoiceBitrate = updateVoiceBitrate;
+  window.updateVcIdleTimeout = updateVcIdleTimeout;
+
+  async function applyVoiceBitrateToPeers() {
+    const maxBr = appSettings.voiceBitrate || 48000;
+    for (const pc of Object.values(peerConnections)) {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+      if (!sender || !sender.getParameters) continue;
+      try {
+        const params = sender.getParameters();
+        if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+        params.encodings[0].maxBitrate = maxBr;
+        await sender.setParameters(params);
+      } catch (_) {}
+    }
+  }
+
   async function startScreenShare() {
     if (!inVoiceChannel) return alert("Join a voice channel first");
     try {
@@ -5259,8 +5707,7 @@
     if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
   });
 
-  // When a new user joins voice while we're screensharing, send them a screen offer
-  const _origVoiceUserJoined = null;
+  // When a new user joins voice while we're screensharing / camera, sync media
   socket.on("voice_user_joined", (data) => {
     if (isScreenSharing && data.socketId) {
       createScreenPeerConnection(data.socketId, true);
@@ -5270,17 +5717,21 @@
   // ── Feature 1: Fix deafen button icon and VC user icons ──────────────────
   // Redefine toggleDeafen to use 🔕 instead of 🔇
   window.toggleDeafen = function() {
+    if (isServerDeafened) {
+      showToast("You are server deafened", "error");
+      return;
+    }
     isDeafened = !isDeafened;
     refreshAllVcVolumes();
     // Deafening always mutes; undeafening restores unmuted state
     if (isDeafened && !isMuted) toggleMute(true);
-    if (!isDeafened && isMuted) toggleMute(true);
+    if (!isDeafened && isMuted && !isServerMuted) toggleMute(true);
     const muteBtn = document.getElementById("muteBtn");
     const btn = document.getElementById("deafenBtn");
     btn.textContent = isDeafened ? "🔕" : "🔊";
     btn.classList.toggle("deafened", isDeafened);
     // Lock mute button while deafened so user can't accidentally unmute
-    if (muteBtn) muteBtn.classList.toggle("locked", isDeafened);
+    if (muteBtn) muteBtn.classList.toggle("locked", isDeafened || isServerMuted || isServerDeafened);
     isDeafened ? playDeafenSound() : playUndeafenSound();
     if (inVoiceChannel) socket.emit("voice_mute_state", { channelId: currentVoiceChannelId, username, muted: isMuted, deafened: isDeafened });
   };
@@ -5776,8 +6227,10 @@
 
   function setUserSpeaking(name, speaking) {
     if (!name) return;
-    if (speaking) speakingUsers.add(name);
-    else speakingUsers.delete(name);
+    if (speaking) {
+      speakingUsers.add(name);
+      if (name === username) bumpVcActivity();
+    } else speakingUsers.delete(name);
     document.querySelectorAll(".vc-user-entry").forEach(el => {
       if (el.dataset.vcname === name) el.classList.toggle("speaking", speaking);
     });
@@ -5983,19 +6436,74 @@
 
   function openVcVolumeMenu(e, name) {
     e.preventDefault();
+    e.stopPropagation();
     vcVolumeTarget = name;
     const menu = document.getElementById("vcVolumeMenu");
     document.getElementById("vcVolumeMenuName").textContent = name;
     const vol = userVolumes[name] ?? 100;
     document.getElementById("vcVolumeSlider").value = vol;
     document.getElementById("vcVolumeLabel").textContent = vol + "%";
-    // Position near cursor, keep within viewport
-    const x = Math.min(e.clientX, window.innerWidth - 210);
-    const y = Math.min(e.clientY, window.innerHeight - 80);
+    const modBox = document.getElementById("vcModActions");
+    const canMod = name !== username && (["owner", "admin"].includes(myRole) || !!(currentMembers.find(m => m.username === username)?.customRole?.canKickMembers));
+    if (modBox) modBox.style.display = canMod ? "flex" : "none";
+    const x = Math.min(e.clientX, window.innerWidth - 220);
+    const y = Math.min(e.clientY, window.innerHeight - (canMod ? 220 : 80));
     menu.style.left = x + "px";
     menu.style.top  = y + "px";
     menu.style.display = "block";
   }
+
+  function modServerMute(on) {
+    if (!vcVolumeTarget || !currentVoiceChannelId) return;
+    socket.emit("mod_voice_state", {
+      channelId: currentVoiceChannelId,
+      target: vcVolumeTarget,
+      serverMuted: !!on,
+      by: username,
+    });
+    showToast(on ? `Server muted ${vcVolumeTarget}` : `Cleared server mute on ${vcVolumeTarget}`, "success");
+    document.getElementById("vcVolumeMenu").style.display = "none";
+  }
+
+  function modServerDeafen(on) {
+    if (!vcVolumeTarget || !currentVoiceChannelId) return;
+    socket.emit("mod_voice_state", {
+      channelId: currentVoiceChannelId,
+      target: vcVolumeTarget,
+      serverDeafened: !!on,
+      by: username,
+    });
+    showToast(on ? `Server deafened ${vcVolumeTarget}` : `Cleared server deafen on ${vcVolumeTarget}`, "success");
+    document.getElementById("vcVolumeMenu").style.display = "none";
+  }
+  window.modServerMute = modServerMute;
+  window.modServerDeafen = modServerDeafen;
+
+  socket.on("force_voice_state", ({ channelId, serverMuted, serverDeafened, muted, deafened, by }) => {
+    if (!inVoiceChannel || String(channelId) !== String(currentVoiceChannelId)) return;
+    isServerMuted = !!serverMuted;
+    isServerDeafened = !!serverDeafened;
+    isMuted = !!muted;
+    isDeafened = !!deafened;
+    if (localStream) localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+    refreshAllVcVolumes();
+    const mb = document.getElementById("muteBtn");
+    const db = document.getElementById("deafenBtn");
+    if (mb) {
+      mb.textContent = isMuted ? "🔇" : "🎤";
+      mb.classList.toggle("muted", isMuted);
+      mb.classList.toggle("locked", isServerMuted || isServerDeafened);
+    }
+    if (db) {
+      db.textContent = isDeafened ? "🔕" : "🔊";
+      db.classList.toggle("deafened", isDeafened);
+    }
+    if (isServerMuted || isServerDeafened) {
+      showToast(`${by || "A moderator"} server-${isServerDeafened ? "deafened" : "muted"} you`, "error");
+    } else {
+      showToast("Server mute/deafen cleared", "success");
+    }
+  });
 
   function applyVcVolume(val) {
     if (!vcVolumeTarget) return;
@@ -6045,7 +6553,7 @@
     if (!roles.length) {
       list.innerHTML = `<p style="color:#96989d;font-size:14px;margin-bottom:12px">No custom roles yet.</p>`;
     } else {
-      list.innerHTML = roles.map(r => {
+      list.innerHTML = `<p style="font-size:12px;color:#96989d;margin-bottom:8px">Drag ↕ to change hierarchy (top = higher).</p>` + roles.map(r => {
         const perms = [
           r.hoist && "Separate list",
           r.canManageChannels && "Manage Channels",
@@ -6056,7 +6564,8 @@
           r.canManageRoles   && "Manage Roles",
         ].filter(Boolean).join(", ") || "No permissions";
         return `
-          <div class="ss-role-item">
+          <div class="ss-role-item" draggable="true" data-role-id="${r.id}" ondragstart="roleDragStart(event)" ondragover="roleDragOver(event)" ondrop="roleDrop(event)" ondragend="roleDragEnd(event)">
+            <span style="cursor:grab;color:#96989d;padding:0 4px" title="Drag to reorder">⠿</span>
             <div class="role-pill" style="background:${r.color}">${escHtml(r.name)}</div>
             <div style="flex:1;font-size:12px;color:#96989d">${perms}</div>
             <button class="btn-sm" onclick="ssEditRole(${r.id})">Edit</button>
@@ -6067,6 +6576,47 @@
     }
     ssClearRoleEditor();
   }
+
+  let _dragRoleId = null;
+  function roleDragStart(e) {
+    _dragRoleId = e.currentTarget.dataset.roleId;
+    e.currentTarget.style.opacity = "0.5";
+    e.dataTransfer.effectAllowed = "move";
+  }
+  function roleDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const row = e.target.closest(".ss-role-item");
+    if (row) row.style.outline = "1px solid #5865f2";
+  }
+  function roleDragEnd(e) {
+    e.currentTarget.style.opacity = "1";
+    document.querySelectorAll(".ss-role-item").forEach(el => { el.style.outline = ""; el.style.opacity = "1"; });
+  }
+  async function roleDrop(e) {
+    e.preventDefault();
+    const target = e.target.closest(".ss-role-item");
+    if (!target || !_dragRoleId) return;
+    const list = document.getElementById("ssRoleList");
+    const rows = [...list.querySelectorAll(".ss-role-item")];
+    const from = rows.find(r => r.dataset.roleId === String(_dragRoleId));
+    if (!from || from === target) return;
+    const fromIdx = rows.indexOf(from);
+    const toIdx = rows.indexOf(target);
+    if (fromIdx < toIdx) target.after(from);
+    else target.before(from);
+    const roleIds = [...list.querySelectorAll(".ss-role-item")].map(r => parseInt(r.dataset.roleId, 10));
+    await fetch(`${SERVER}/reorder-roles`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serverId: currentServerId, roleIds, updatedBy: username })
+    });
+    await loadMembers();
+    _dragRoleId = null;
+  }
+  window.roleDragStart = roleDragStart;
+  window.roleDragOver = roleDragOver;
+  window.roleDrop = roleDrop;
+  window.roleDragEnd = roleDragEnd;
 
   function ssEditRole(roleId) {
     fetch(`${SERVER}/server-roles/${currentServerId}`)
@@ -6163,12 +6713,14 @@
 
   const THEMES = [
     { id: 'dark',     label: 'Dark',     colors: ['#1e1f22','#2b2d31','#313338'] },
+    { id: 'slate',    label: 'Slate',    colors: ['#0f1419','#151b22','#1c2430'] },
+    { id: 'graphite', label: 'Graphite', colors: ['#121212','#1a1a1a','#222222'] },
     { id: 'amoled',   label: 'AMOLED',   colors: ['#000000','#080808','#0d0d0d'] },
     { id: 'midnight', label: 'Midnight', colors: ['#0f1022','#16172a','#1a1b2e'] },
-    { id: 'sakura',   label: 'Sakura',   colors: ['#1a0d12','#251419','#2a1f24'] },
     { id: 'forest',   label: 'Forest',   colors: ['#0e150f','#161e17','#1b2320'] },
   ];
   const ACCENT_COLORS = [
+    { name:'Teal',     hex:'#2dd4bf' },
     { name:'Blurple',  hex:'#5865f2' },
     { name:'Crimson',  hex:'#ed4245' },
     { name:'Green',    hex:'#3ba55c' },
@@ -6772,6 +7324,12 @@
   const _origInitUI = initUI;
   initUI = function() {
     _origInitUI();
+    try {
+      dmUnread = JSON.parse(localStorage.getItem("dmUnread_" + username) || "{}");
+    } catch (_) {
+      dmUnread = {};
+    }
+    updateDmHomeBadge();
     loadBlocks();
     // Request notification permission
     if (Notification.permission === "default") Notification.requestPermission();

@@ -9,6 +9,7 @@ const { Sequelize, DataTypes, Op } = require("sequelize");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 
 // Data dir: local folder in dev, or Electron userData when packaged/shared
 const DATA_DIR = process.env.DISCORD_LITE_DATA
@@ -69,6 +70,8 @@ const Channel = sequelize.define("Channel", {
   serverId: { type: DataTypes.INTEGER, allowNull: false },
   name: { type: DataTypes.STRING, allowNull: false },
   type: { type: DataTypes.STRING, allowNull: false, defaultValue: "text" },
+  restricted: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  allowRoleIds: { type: DataTypes.TEXT, allowNull: true, defaultValue: "[]" },
 });
 
 const ServerMember = sequelize.define("ServerMember", {
@@ -107,10 +110,26 @@ const Message = sequelize.define("Message", {
 });
 
 const DirectMessage = sequelize.define("DirectMessage", {
-  user1: { type: DataTypes.STRING, allowNull: false },
-  user2: { type: DataTypes.STRING, allowNull: false },
+  user1: { type: DataTypes.STRING, allowNull: false, defaultValue: "" },
+  user2: { type: DataTypes.STRING, allowNull: false, defaultValue: "" },
   dmKey: { type: DataTypes.STRING, allowNull: false, unique: true },
+  isGroup: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  name: { type: DataTypes.STRING, allowNull: true },
+  members: { type: DataTypes.TEXT, allowNull: true, defaultValue: "[]" },
 });
+
+function parseThreadMembers(thread) {
+  if (!thread) return [];
+  if (thread.isGroup) {
+    try {
+      const list = JSON.parse(thread.members || "[]");
+      return Array.isArray(list) ? list.filter(Boolean) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+  return [thread.user1, thread.user2].filter(Boolean);
+}
 
 const FriendRequest = sequelize.define("FriendRequest", {
   from: { type: DataTypes.STRING, allowNull: false },
@@ -186,6 +205,7 @@ const ServerRole = sequelize.define("ServerRole", {
   name:               { type: DataTypes.STRING,  allowNull: false },
   color:              { type: DataTypes.STRING,  allowNull: false, defaultValue: "#5865f2" },
   hoist:              { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  position:           { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
   canManageChannels:  { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   canKickMembers:     { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   canBanMembers:      { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
@@ -235,6 +255,8 @@ async function emitServerMembers(serverId) {
     customRoleId: member.customRoleId || null,
     customRole: member.customRoleId ? roleMap[member.customRoleId] || null : null,
     online: onlineUsers.has(member.username),
+    status: userStatuses.get(member.username) || (onlineUsers.has(member.username) ? "online" : "offline"),
+    nowPlaying: userMap[member.username]?.nowPlaying || "",
     avatarColor: userMap[member.username]?.avatarColor || "#5865f2",
     bio: userMap[member.username]?.bio || "",
     avatarUrl: userMap[member.username]?.avatarUrl || null,
@@ -242,15 +264,39 @@ async function emitServerMembers(serverId) {
   io.to(`server_${serverId}`).emit("server_members", result);
 }
 
+function parseAllowRoleIds(channel) {
+  try {
+    const raw = channel.allowRoleIds;
+    if (!raw) return [];
+    const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(arr) ? arr.map(Number).filter(Boolean) : [];
+  } catch { return []; }
+}
+
+async function memberCanAccessChannel(channel, username) {
+  if (!channel.restricted) return true;
+  const member = await ServerMember.findOne({ where: { serverId: channel.serverId, username } });
+  if (!member) return false;
+  if (member.role === "owner" || member.role === "admin") return true;
+  const allowed = parseAllowRoleIds(channel);
+  if (!allowed.length) return false;
+  return member.customRoleId && allowed.includes(Number(member.customRoleId));
+}
+
 async function emitVoiceState(channelId) {
   const key = String(channelId);
   const users = voiceRooms.get(key) || new Set();
   const muteMap = voiceMuteStates.get(key) || new Map();
-  const usersWithState = Array.from(users).map(u => ({
-    username: u,
-    muted: muteMap.get(u)?.muted || false,
-    deafened: muteMap.get(u)?.deafened || false,
-  }));
+  const usersWithState = Array.from(users).map(u => {
+    const st = muteMap.get(u) || {};
+    return {
+      username: u,
+      muted: !!(st.muted || st.serverMuted),
+      deafened: !!(st.deafened || st.serverDeafened),
+      serverMuted: !!st.serverMuted,
+      serverDeafened: !!st.serverDeafened,
+    };
+  });
   io.emit("voice_state", { channelId: key, users: usersWithState });
 }
 
@@ -286,8 +332,12 @@ io.on("connection", (socket) => {
     socket.emit("load_messages", messages);
   });
 
-  socket.on("join_dm", async ({ dmKey: key, username }) => {
+  socket.on("join_dm", async ({ dmKey: key, username: joinUser }) => {
     if (!key) return;
+    if (joinUser) {
+      const thread = await DirectMessage.findOne({ where: { dmKey: key } });
+      if (thread && !parseThreadMembers(thread).includes(joinUser)) return;
+    }
     Array.from(socket.rooms).forEach((room) => {
       if (room !== socket.id && room.startsWith("dm_")) socket.leave(room);
       if (room !== socket.id && room.startsWith("channel_")) socket.leave(room);
@@ -323,6 +373,7 @@ io.on("connection", (socket) => {
     if (channelId) {
       const channel = await Channel.findByPk(channelId);
       if (!channel) return;
+      if (!(await memberCanAccessChannel(channel, username))) return;
       const saved = await Message.create({ serverId: channel.serverId, channelId, username, message, replyToId: replyToId || null, replyPreview, replyAuthor });
       io.to(`channel_${channelId}`).emit("receive_message", saved);
       // Alert all online server members (even if they aren't in this channel room)
@@ -338,6 +389,7 @@ io.on("connection", (socket) => {
       };
       for (const m of members) {
         if (m.username === username) continue;
+        if (!(await memberCanAccessChannel(channel, m.username))) continue;
         io.to(`user_${m.username}`).emit("message_notify", notif);
       }
     } else if (key) {
@@ -345,14 +397,14 @@ io.on("connection", (socket) => {
       io.to(`dm_${key}`).emit("receive_message", saved);
       const thread = await DirectMessage.findOne({ where: { dmKey: key } });
       if (thread) {
-        const other = thread.user1 === username ? thread.user2 : thread.user1;
         const preview = String(message).startsWith("[FILE:") ? "📎 File" : String(message).slice(0, 120);
-        io.to(`user_${other}`).emit("message_notify", {
-          id: saved.id,
-          dmKey: key,
-          username,
-          message: preview
-        });
+        const notif = { id: saved.id, dmKey: key, username, message: preview };
+        for (const member of parseThreadMembers(thread)) {
+          if (member === username) continue;
+          io.to(`user_${member}`).emit("message_notify", notif);
+        }
+        thread.changed("updatedAt", true);
+        await thread.save();
       }
     }
   });
@@ -376,11 +428,14 @@ io.on("connection", (socket) => {
 
   socket.on("join_voice", async ({ channelId, username }) => {
     if (!channelId || !username) return;
+    const channel = await Channel.findByPk(channelId);
+    if (!channel) return;
+    if (!(await memberCanAccessChannel(channel, username))) return;
     const key = String(channelId);
     if (!voiceRooms.has(key)) voiceRooms.set(key, new Set());
     voiceRooms.get(key).add(username);
     if (!voiceMuteStates.has(key)) voiceMuteStates.set(key, new Map());
-    voiceMuteStates.get(key).set(username, { muted: false, deafened: false });
+    voiceMuteStates.get(key).set(username, { muted: false, deafened: false, serverMuted: false, serverDeafened: false });
     socket.join(`voice_${channelId}`);
     socket.to(`voice_${channelId}`).emit("voice_user_joined", { username, socketId: socket.id });
     await emitVoiceState(channelId);
@@ -405,7 +460,49 @@ io.on("connection", (socket) => {
     if (!channelId || !username) return;
     const key = String(channelId);
     if (!voiceMuteStates.has(key)) voiceMuteStates.set(key, new Map());
-    voiceMuteStates.get(key).set(username, { muted, deafened });
+    const prev = voiceMuteStates.get(key).get(username) || {};
+    // Server mute/deafen cannot be cleared by the user
+    let nextMuted = !!muted;
+    let nextDeafened = !!deafened;
+    if (prev.serverMuted) nextMuted = true;
+    if (prev.serverDeafened) { nextDeafened = true; nextMuted = true; }
+    voiceMuteStates.get(key).set(username, {
+      muted: nextMuted,
+      deafened: nextDeafened,
+      serverMuted: !!prev.serverMuted,
+      serverDeafened: !!prev.serverDeafened,
+    });
+    await emitVoiceState(channelId);
+  });
+
+  // Mods: force mute / deafen someone in VC
+  socket.on("mod_voice_state", async ({ channelId, target, serverMuted, serverDeafened, by }) => {
+    if (!channelId || !target || !by) return;
+    const channel = await Channel.findByPk(channelId);
+    if (!channel) return;
+    if (!await hasPerm(channel.serverId, by, "canKickMembers")) return;
+    if (target === by) return;
+    const key = String(channelId);
+    if (!voiceRooms.has(key) || !voiceRooms.get(key).has(target)) return;
+    if (!voiceMuteStates.has(key)) voiceMuteStates.set(key, new Map());
+    const prev = voiceMuteStates.get(key).get(target) || {};
+    const sm = serverMuted !== undefined ? !!serverMuted : !!prev.serverMuted;
+    const sd = serverDeafened !== undefined ? !!serverDeafened : !!prev.serverDeafened;
+    const next = {
+      serverMuted: sm,
+      serverDeafened: sd,
+      muted: sm || sd,
+      deafened: sd,
+    };
+    voiceMuteStates.get(key).set(target, next);
+    io.to(`user_${target}`).emit("force_voice_state", {
+      channelId: key,
+      serverMuted: next.serverMuted,
+      serverDeafened: next.serverDeafened,
+      muted: next.muted,
+      deafened: next.deafened,
+      by,
+    });
     await emitVoiceState(channelId);
   });
 
@@ -577,20 +674,46 @@ app.get("/my-servers/:username", async (req, res) => {
 
 app.get("/channels/:serverId", async (req, res) => {
   try {
+    const username = req.query.username || "";
     const channels = await Channel.findAll({ where: { serverId: req.params.serverId }, order: [["type", "ASC"], ["createdAt", "ASC"]] });
-    res.json(channels);
+    if (!username) return res.json(channels);
+    const visible = [];
+    for (const ch of channels) {
+      if (await memberCanAccessChannel(ch, username)) visible.push(ch);
+    }
+    res.json(visible);
   } catch { res.status(500).json({ error: "Failed to load channels" }); }
 });
 
 app.post("/create-channel", async (req, res) => {
   try {
-    const { serverId, name, type, username } = req.body;
+    const { serverId, name, type, username, restricted, allowRoleIds } = req.body;
     if (!serverId || !name || !username) return res.status(400).json({ error: "Missing data" });
     const member = await ServerMember.findOne({ where: { serverId, username } });
     if (!member || !["owner", "admin"].includes(member.role)) return res.status(403).json({ error: "No permission" });
-    const channel = await Channel.create({ serverId, name: name.trim(), type: type || "text" });
+    const channel = await Channel.create({
+      serverId,
+      name: name.trim(),
+      type: type || "text",
+      restricted: !!restricted,
+      allowRoleIds: JSON.stringify(Array.isArray(allowRoleIds) ? allowRoleIds : []),
+    });
     res.json({ message: "Channel created", channel });
   } catch { res.status(500).json({ error: "Failed to create channel" }); }
+});
+
+app.post("/update-channel-perms", async (req, res) => {
+  try {
+    const { channelId, username, restricted, allowRoleIds } = req.body;
+    const channel = await Channel.findByPk(channelId);
+    if (!channel) return res.status(404).json({ error: "Channel not found" });
+    if (!await hasPerm(channel.serverId, username, "canManageChannels"))
+      return res.status(403).json({ error: "No permission" });
+    channel.restricted = !!restricted;
+    channel.allowRoleIds = JSON.stringify(Array.isArray(allowRoleIds) ? allowRoleIds : []);
+    await channel.save();
+    res.json({ message: "Channel permissions updated", channel });
+  } catch { res.status(500).json({ error: "Failed to update channel" }); }
 });
 
 app.post("/delete-channel", async (req, res) => {
@@ -658,12 +781,18 @@ app.get("/server-members/:serverId/:username", async (req, res) => {
     const members = await ServerMember.findAll({ where: { serverId }, order: [["role", "ASC"], ["username", "ASC"]] });
     const users = await User.findAll({ where: { username: members.map(m => m.username) } });
     const userMap = Object.fromEntries(users.map(u => [u.username, u]));
+    const roles = await ServerRole.findAll({ where: { serverId } });
+    const roleMap = Object.fromEntries(roles.map(r => [r.id, r]));
     const result = members.map((m) => ({
       id: m.id, username: m.username, role: m.role,
+      customRoleId: m.customRoleId || null,
+      customRole: m.customRoleId ? roleMap[m.customRoleId] || null : null,
       online: onlineUsers.has(m.username),
+      status: userStatuses.get(m.username) || (onlineUsers.has(m.username) ? "online" : "offline"),
+      nowPlaying: userMap[m.username]?.nowPlaying || "",
       avatarColor: userMap[m.username]?.avatarColor || "#5865f2",
       bio: userMap[m.username]?.bio || "",
-      avatarUrl: userMap[m.username]?.avatarUrl || null,           // Feature 10
+      avatarUrl: userMap[m.username]?.avatarUrl || null,
     }));
     res.json({ myRole: myMembership.role, members: result });
   } catch { res.status(500).json({ error: "Failed to load members" }); }
@@ -706,7 +835,10 @@ app.post("/delete-server", async (req, res) => {
 
 app.get("/server-roles/:serverId", async (req, res) => {
   try {
-    const roles = await ServerRole.findAll({ where: { serverId: req.params.serverId }, order: [["name", "ASC"]] });
+    const roles = await ServerRole.findAll({
+      where: { serverId: req.params.serverId },
+      order: [["position", "DESC"], ["name", "ASC"]]
+    });
     res.json(roles);
   } catch { res.status(500).json({ error: "Failed to load roles" }); }
 });
@@ -716,9 +848,11 @@ app.post("/create-role", async (req, res) => {
     const { serverId, name, color, createdBy, hoist, canManageChannels, canKickMembers, canBanMembers, canInviteMembers, canPinMessages, canManageRoles } = req.body;
     if (!await hasPerm(serverId, createdBy, "canManageRoles"))
       return res.status(403).json({ error: "No permission to manage roles" });
+    const maxPos = await ServerRole.max("position", { where: { serverId } });
     const role = await ServerRole.create({
       serverId, name: name.trim(), color: color || "#5865f2",
       hoist: !!hoist,
+      position: (maxPos || 0) + 1,
       canManageChannels: !!canManageChannels, canKickMembers: !!canKickMembers, canBanMembers: !!canBanMembers,
       canInviteMembers: canInviteMembers !== false, canPinMessages: !!canPinMessages, canManageRoles: !!canManageRoles
     });
@@ -758,6 +892,23 @@ app.post("/delete-role", async (req, res) => {
   } catch { res.status(500).json({ error: "Failed to delete role" }); }
 });
 
+app.post("/reorder-roles", async (req, res) => {
+  try {
+    const { serverId, roleIds, updatedBy } = req.body;
+    if (!Array.isArray(roleIds) || !serverId) return res.status(400).json({ error: "Missing data" });
+    if (!await hasPerm(serverId, updatedBy, "canManageRoles")) return res.status(403).json({ error: "No permission" });
+    // roleIds[0] = highest position
+    for (let i = 0; i < roleIds.length; i++) {
+      await ServerRole.update(
+        { position: roleIds.length - i },
+        { where: { id: roleIds[i], serverId } }
+      );
+    }
+    await emitServerMembers(serverId);
+    res.json({ message: "Roles reordered" });
+  } catch { res.status(500).json({ error: "Failed to reorder roles" }); }
+});
+
 app.post("/assign-role", async (req, res) => {
   try {
     const { serverId, targetUsername, roleId, assignedBy } = req.body;
@@ -774,12 +925,33 @@ app.post("/assign-role", async (req, res) => {
 app.get("/dm-threads/:username", async (req, res) => {
   try {
     const { username } = req.params;
-    const threads = await DirectMessage.findAll({ where: { [Op.or]: [{ user1: username }, { user2: username }] }, order: [["updatedAt", "DESC"]] });
-    const result = await Promise.all(threads.map(async t => {
+    const pairwise = await DirectMessage.findAll({
+      where: {
+        [Op.and]: [
+          { [Op.or]: [{ isGroup: false }, { isGroup: null }] },
+          { [Op.or]: [{ user1: username }, { user2: username }] }
+        ]
+      }
+    });
+    const groups = await DirectMessage.findAll({ where: { isGroup: true } });
+    const myGroups = groups.filter((t) => parseThreadMembers(t).includes(username));
+    const threads = [...pairwise, ...myGroups].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    const result = await Promise.all(threads.map(async (t) => {
       const last = await Message.findOne({ where: { dmKey: t.dmKey }, order: [["createdAt", "DESC"]] });
-      const other = t.user1 === username ? t.user2 : t.user1;
-      const isOnline = onlineUsers.has(other);
-      return { ...t.toJSON(), lastMessage: last?.message || null, lastMessageBy: last?.username || null, isOnline };
+      const members = parseThreadMembers(t);
+      const others = members.filter((m) => m !== username);
+      const other = t.isGroup ? null : (others[0] || null);
+      const isOnline = t.isGroup
+        ? others.some((m) => onlineUsers.has(m))
+        : !!(other && onlineUsers.has(other));
+      return {
+        ...t.toJSON(),
+        members,
+        displayName: t.isGroup ? (t.name || others.join(", ") || "Group") : other,
+        lastMessage: last?.message || null,
+        lastMessageBy: last?.username || null,
+        isOnline
+      };
     }));
     res.json(result);
   } catch { res.status(500).json({ error: "Failed to load DM threads" }); }
@@ -793,9 +965,61 @@ app.post("/open-dm", async (req, res) => {
     if (!target) return res.status(404).json({ error: "User not found" });
     const key = dmKey(username, targetUsername);
     let thread = await DirectMessage.findOne({ where: { dmKey: key } });
-    if (!thread) thread = await DirectMessage.create({ user1: username, user2: targetUsername, dmKey: key });
+    if (!thread) thread = await DirectMessage.create({ user1: username, user2: targetUsername, dmKey: key, isGroup: false });
     res.json({ thread, targetAvatarColor: target.avatarColor, targetBio: target.bio });
   } catch { res.status(500).json({ error: "Failed to open DM" }); }
+});
+
+app.post("/group-dm", async (req, res) => {
+  try {
+    const username = String(req.body.username || "").trim();
+    const name = String(req.body.name || "").trim().slice(0, 64);
+    let members = Array.isArray(req.body.members) ? req.body.members.map((m) => String(m || "").trim()).filter(Boolean) : [];
+    if (!username) return res.status(400).json({ error: "Missing username" });
+    members = [...new Set(members.filter((m) => m.toLowerCase() !== username.toLowerCase()))];
+    if (members.length < 1) return res.status(400).json({ error: "Add at least one other person" });
+    if (members.length > 9) return res.status(400).json({ error: "Group DMs are limited to 10 people" });
+
+    const resolved = [];
+    for (const m of members) {
+      const u = await User.findOne({
+        where: sequelize.where(sequelize.fn("lower", sequelize.col("username")), m.toLowerCase())
+      });
+      if (!u) return res.status(404).json({ error: `User not found: ${m}` });
+      resolved.push(u.username);
+    }
+    const all = [...new Set([username, ...resolved])].sort((a, b) => a.localeCompare(b));
+    const key = "g:" + crypto.randomBytes(8).toString("hex");
+    const display = name || all.filter((m) => m !== username).join(", ");
+    const thread = await DirectMessage.create({
+      user1: username,
+      user2: "",
+      dmKey: key,
+      isGroup: true,
+      name: display,
+      members: JSON.stringify(all)
+    });
+    const preview = { type: "group_dm", dmKey: key, name: display, by: username, members: all };
+    for (const m of all) {
+      if (m === username) continue;
+      io.to(`user_${m}`).emit("group_dm_created", preview);
+    }
+    res.json({ thread: { ...thread.toJSON(), members: all, displayName: display } });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to create group DM" });
+  }
+});
+
+app.get("/dm-thread/:dmKey", async (req, res) => {
+  try {
+    const thread = await DirectMessage.findOne({ where: { dmKey: req.params.dmKey } });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+    const members = parseThreadMembers(thread);
+    res.json({ ...thread.toJSON(), members, displayName: thread.isGroup ? (thread.name || "Group") : null });
+  } catch {
+    res.status(500).json({ error: "Failed to load thread" });
+  }
 });
 
 app.post("/friend-request", async (req, res) => {
@@ -1024,12 +1248,18 @@ app.get("/link-preview", async (req, res) => {
 
 app.get("/search-messages", async (req, res) => {
   try {
-    const { serverId, query } = req.query;
+    const { serverId, query, author, channelId } = req.query;
     if (!serverId || !query) return res.status(400).json({ error: "Missing params" });
+    const where = {
+      serverId,
+      message: { [Op.like]: `%${query}%` },
+    };
+    if (author) where.username = { [Op.like]: String(author) }; // SQLite LIKE is case-insensitive for ASCII
+    if (channelId) where.channelId = channelId;
     const messages = await Message.findAll({
-      where: { serverId, message: { [Op.like]: `%${query}%` } },
+      where,
       order: [["createdAt", "DESC"]],
-      limit: 50
+      limit: 80
     });
     const channelIds = [...new Set(messages.filter(m => m.channelId).map(m => m.channelId))];
     const chans = channelIds.length ? await Channel.findAll({ where: { id: { [Op.in]: channelIds } } }) : [];

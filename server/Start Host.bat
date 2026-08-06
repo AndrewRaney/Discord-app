@@ -4,8 +4,8 @@ title Discord Lite Host
 
 echo.
 echo === Discord Lite Host ===
-echo Runs the chat server only (no Electron window).
-echo Leave this window open while friends are playing.
+echo Runs the chat server only (tray icon when Electron is available).
+echo Leave this running while friends are playing.
 echo.
 
 where node >nul 2>&1
@@ -34,14 +34,24 @@ if not exist "server.js" (
 
 set "DISCORD_LITE_DATA=%APPDATA%\Discord Lite Host"
 if not exist "%DISCORD_LITE_DATA%" mkdir "%DISCORD_LITE_DATA%"
+set "DISCORD_LITE_HOST_MODE=1"
 
 echo Data folder: %DISCORD_LITE_DATA%
-echo Starting server on port 3001...
+echo Starting host on port 3001...
 echo When the public tunnel is ready, see:
 echo   Desktop\Discord-Lite-Host-URL.txt
 echo.
 
-node server.js
+if exist "node_modules\electron\cli.js" (
+  echo Tray: look for "Discord Lite Host — running" in the system tray.
+  echo.
+  call npx --yes electron . --host
+) else (
+  echo Electron not found — running console host ^(no tray^).
+  echo.
+  node server.js
+)
+
 echo.
 echo Host stopped.
 pause

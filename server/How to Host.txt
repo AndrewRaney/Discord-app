@@ -12,31 +12,47 @@ ONE-TIME SETUP ON THE HOST PC
    https://nodejs.org
    (Restart the PC after installing if "node" is not recognized.)
 
-2) Get the server files
-   Option A — clone the repo:
-     git clone https://github.com/AndrewRaney/Discord-app.git
-     then open the "server" folder inside it
+2) Get the Host Pack (easiest)
+   https://github.com/AndrewRaney/Discord-app/releases/latest
+   Download:  Discord-Lite-Host-….zip
+   Unzip anywhere (e.g. Desktop\Discord-Lite-Host)
 
-   Option B — copy the whole "server" folder from the developer's PC
-     onto this machine (must include package.json and server.js)
+   Or clone/copy the "server" folder from the repo instead.
 
-3) Open a terminal in that "server" folder and run once:
-     npm install
-
-4) Double-click:  Start Host.bat
-   Leave the black console window open.
+3) Double-click:  Start Host.bat
+   First run installs dependencies (npm install).
+   Prefer leaving the tray icon running ("Discord Lite Host — running").
+   A console window may also stay open — leave it until you Stop Host.
    Wait until you see "Public tunnel: https://...."
 
-5) On the Desktop, open:
+4) On the Desktop, open:
      Discord-Lite-Host-URL.txt
    Send that URL to your friends.
 
-6) Double-click:  Install Host Autostart.bat
+5) Double-click:  Install Host Autostart.bat
    So the host starts again after login/reboot.
 
-7) Power settings — keep the PC awake:
+6) Power settings — keep the PC awake:
    Windows Settings → System → Power → Screen and sleep →
    set Sleep to Never while plugged in.
+
+------------------------------------------------
+MOVE EXISTING CHAT DATA ONTO THE HOST
+------------------------------------------------
+
+If you already have accounts/messages on another Discord Lite install:
+
+1) Stop Host.bat on the host PC
+2) Copy database.sqlite (and uploads folder if any) onto the host,
+   OR run Migrate Data to Host.bat on the PC that has the data,
+   then copy the resulting folder — simplest path:
+     - On the old PC: ensure Discord Lite was used (data in AppData)
+     - Copy "%APPDATA%\Discord Lite" contents, OR run
+       Migrate Data to Host.bat there, then copy
+       "%APPDATA%\Discord Lite Host" to the second PC's same path
+     - On the host PC: run Migrate Data to Host.bat if the DB
+       file is sitting next to the host scripts
+3) Start Host.bat again
 
 ------------------------------------------------
 EVERYONE ELSE (CLIENTS)
@@ -49,7 +65,7 @@ EVERYONE ELSE (CLIENTS)
    (from Discord-Lite-Host-URL.txt on the host PC)
 
 3) Create Account / Sign in on THAT server.
-   Accounts on an old host do not carry over automatically.
+   If you migrated the DB, use the same usernames/passwords.
 
 ------------------------------------------------
 DAY TO DAY
@@ -75,13 +91,13 @@ Back up that folder if you care about keeping messages.
 UPDATING THE HOST
 ------------------------------------------------
 
-When the developer updates the server code:
+When a new Host zip is published:
 
 1) Stop Host.bat
-2) Pull / copy the new "server" files
-3) npm install
-4) Start Host.bat again
-5) Re-share Discord-Lite-Host-URL.txt if the tunnel URL changed
+2) Unzip the new Discord-Lite-Host-….zip over the old folder
+   (keep your data in AppData — do not delete that)
+3) Start Host.bat again
+4) Re-share Discord-Lite-Host-URL.txt if the tunnel URL changed
 
 Client apps still update via the Setup installer + GitHub Releases.
 
