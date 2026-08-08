@@ -1,15 +1,18 @@
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, dialog, Tray, Menu, nativeImage } = require('electron');
+﻿const { app, BrowserWindow, session, desktopCapturer, ipcMain, dialog, Tray, Menu, nativeImage, nativeTheme } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const net = require('net');
 const fs = require('fs');
+
+// Prefer dark native chrome (avoids Windows accent-colored title bars)
+nativeTheme.themeSource = 'dark';
 
 let mainWin = null;
 let pendingScreenCallback = null;
 let serverProc = null;
 let appTray = null;
 
-function waitForPort(port, host = '127.0.0.1', tries = 40) {
+function waitForPort(port, host = '127.0.0.1', tries = 60) {
   return new Promise((resolve, reject) => {
     let left = tries;
     const tick = () => {
@@ -22,6 +25,31 @@ function waitForPort(port, host = '127.0.0.1', tries = 40) {
         if (left <= 0) reject(new Error('Server did not start in time'));
         else setTimeout(tick, 250);
       });
+    };
+    tick();
+  });
+}
+
+function waitForHealth(tries = 80) {
+  const http = require('http');
+  return new Promise((resolve, reject) => {
+    let left = tries;
+    const tick = () => {
+      const req = http.get('http://127.0.0.1:3001/health', (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => {
+          if (res.statusCode === 200) resolve(body);
+          else retry();
+        });
+      });
+      req.on('error', retry);
+      req.setTimeout(1500, () => { try { req.destroy(); } catch (_) {} retry(); });
+      function retry() {
+        left -= 1;
+        if (left <= 0) reject(new Error('Server health check failed'));
+        else setTimeout(tick, 250);
+      }
     };
     tick();
   });
@@ -58,38 +86,69 @@ function startBackend() {
   const dataDir = process.env.DISCORD_LITE_DATA
     || (app.isPackaged ? app.getPath('userData') : appRoot);
 
-  const cmd = app.isPackaged ? process.execPath : 'node';
+  // Use Electron as Node so PATH / shell quirks don't break spawning on Windows
+  const cmd = process.execPath;
   const env = {
     ...process.env,
-    DISCORD_LITE_DATA: dataDir
+    DISCORD_LITE_DATA: dataDir,
+    ELECTRON_RUN_AS_NODE: '1',
   };
-  if (app.isPackaged) env.ELECTRON_RUN_AS_NODE = '1';
+
+  const logDir = path.join(dataDir, 'logs');
+  try { fs.mkdirSync(logDir, { recursive: true }); } catch (_) {}
+  const logFile = path.join(logDir, 'server-startup.log');
+  const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+  try {
+    logStream.write(`\n---- ${new Date().toISOString()} starting ${serverJs}\n`);
+  } catch (_) {}
 
   serverProc = spawn(cmd, [serverJs], {
     cwd: appRoot,
-    stdio: app.isPackaged ? ['ignore', 'pipe', 'pipe'] : 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
-    shell: !app.isPackaged && process.platform === 'win32',
+    shell: false,
     env
   });
-  serverProc.on('error', (err) => console.error('Failed to start backend:', err));
-  if (serverProc.stderr) {
-    serverProc.stderr.on('data', (buf) => console.error('[server]', buf.toString()));
-  }
+  serverProc.on('error', (err) => {
+    console.error('Failed to start backend:', err);
+    try { logStream.write('spawn error: ' + err.message + '\n'); } catch (_) {}
+  });
+  serverProc.on('exit', (code, signal) => {
+    console.error('Backend exited', code, signal);
+    try { logStream.write(`exit code=${code} signal=${signal}\n`); } catch (_) {}
+  });
   if (serverProc.stdout) {
-    serverProc.stdout.on('data', (buf) => console.log('[server]', buf.toString()));
+    serverProc.stdout.on('data', (buf) => {
+      const t = buf.toString();
+      console.log('[server]', t);
+      try { logStream.write(t); } catch (_) {}
+    });
+  }
+  if (serverProc.stderr) {
+    serverProc.stderr.on('data', (buf) => {
+      const t = buf.toString();
+      console.error('[server]', t);
+      try { logStream.write(t); } catch (_) {}
+    });
   }
 
-  return waitForPort(3001).catch(async () => {
-    try {
-      await waitForPort(3001, '127.0.0.1', 8);
-    } catch (_) {
-      dialog.showErrorBox(
-        'Discord Lite',
-        'Could not start the local server on port 3001.\n\nClose any other Discord Lite window and try again.'
-      );
-    }
-  });
+  return waitForPort(3001)
+    .then(() => waitForHealth())
+    .catch(async (err) => {
+      console.error('Backend wait failed:', err);
+      try {
+        await waitForHealth(20);
+        return;
+      } catch (_) {
+        dialog.showErrorBox(
+          'Iris',
+          'Could not start the local server on port 3001.\n\n' +
+          'Close other Iris / host windows, then try again.\n\n' +
+          'Log: ' + logFile
+        );
+        throw err;
+      }
+    });
 }
 
 function setupAutoUpdates() {
@@ -117,7 +176,7 @@ function setupAutoUpdates() {
       defaultId: 0,
       cancelId: 1,
       title: 'Update ready',
-      message: `Discord Lite ${version} is ready to install.`,
+      message: `Iris ${version} is ready to install.`,
       detail: 'Restart to update. Your friend gets these automatically when you publish a release.'
     });
     if (result.response === 0) {
@@ -147,6 +206,7 @@ function getAppIconPath() {
 }
 
 const isHostMode = process.argv.includes('--host') || process.env.DISCORD_LITE_HOST_MODE === '1';
+const forceLocal = process.argv.includes('--local') || process.env.DISCORD_LITE_FORCE_LOCAL === '1';
 
 function createWindow() {
   const iconPath = getAppIconPath();
@@ -156,12 +216,20 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     icon: iconPath || undefined,
+    backgroundColor: '#1a1b1e',
+    autoHideMenuBar: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#1a1b1e',
+      symbolColor: '#b5bac1',
+      height: 32
+    },
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     },
-    title: 'Discord Lite',
+    title: 'Iris',
     show: false
   });
 
@@ -189,6 +257,22 @@ function createWindow() {
 
   mainWin.removeMenu();
   mainWin.once('ready-to-show', () => mainWin.show());
+
+  if (forceLocal) {
+    mainWin.webContents.on('dom-ready', () => {
+      mainWin.webContents.executeJavaScript(`
+        (function () {
+          var want = 'http://127.0.0.1:3001';
+          var cur = localStorage.getItem('discordLiteServer') || '';
+          if (cur !== want) {
+            localStorage.setItem('discordLiteServer', want);
+            location.reload();
+          }
+        })();
+      `).catch(() => {});
+    });
+  }
+
   mainWin.loadFile('index.html');
 }
 
@@ -230,11 +314,22 @@ app.whenReady().then(async () => {
   ipcMain.on('set-server-address', (_e, url) => writeServerAddressFile(url));
 
   const savedServer = readServerAddressFile();
-  skipLocalBackend = !isHostMode && !!(savedServer && !isLocalServerUrl(savedServer));
+  skipLocalBackend = !isHostMode && !forceLocal && !!(savedServer && !isLocalServerUrl(savedServer));
+  if (forceLocal) {
+    writeServerAddressFile('http://127.0.0.1:3001');
+    skipLocalBackend = false;
+    console.log('Force local mode — starting server + Iris window');
+  }
   if (skipLocalBackend) {
     console.log('Client-only mode — remote host:', savedServer);
   } else {
-    await startBackend();
+    try {
+      await startBackend();
+    } catch (e) {
+      console.error(e);
+      app.quit();
+      return;
+    }
   }
 
   if (isHostMode) {
@@ -259,7 +354,7 @@ function setupTray() {
     const img = nativeImage.createFromPath(iconPath);
     if (img.isEmpty()) return;
     appTray = new Tray(img.resize({ width: 16, height: 16 }));
-    const label = skipLocalBackend ? 'Discord Lite (client)' : 'Discord Lite';
+    const label = skipLocalBackend ? 'Iris (client)' : 'Iris';
     appTray.setToolTip(label);
     appTray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Open', click: () => { if (mainWin) { mainWin.show(); mainWin.focus(); } } },
@@ -283,13 +378,57 @@ function setupHostTray() {
     const img = nativeImage.createFromPath(iconPath);
     if (img.isEmpty()) return;
     appTray = new Tray(img.resize({ width: 16, height: 16 }));
-    appTray.setToolTip('Discord Lite Host — running');
-    appTray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Host running on port 3001', enabled: false },
-      { label: 'Data: ' + (process.env.DISCORD_LITE_DATA || '(local)'), enabled: false },
-      { type: 'separator' },
-      { label: 'Stop Host', click: () => app.quit() },
-    ]));
+    appTray.setToolTip('Iris Host — running');
+
+    const rebuild = async () => {
+      let tunnel = '(starting…)';
+      try {
+        const http = require('http');
+        tunnel = await new Promise((resolve) => {
+          const req = http.get('http://127.0.0.1:3001/tunnel', (res) => {
+            let body = '';
+            res.on('data', (c) => { body += c; });
+            res.on('end', () => {
+              try { resolve(JSON.parse(body).url || '(no url yet)'); }
+              catch { resolve('(no url yet)'); }
+            });
+          });
+          req.on('error', () => resolve('(server not ready)'));
+          req.setTimeout(2000, () => { try { req.destroy(); } catch (_) {} resolve('(timeout)'); });
+        });
+      } catch (_) {}
+      const short = String(tunnel).length > 48 ? String(tunnel).slice(0, 45) + '…' : String(tunnel);
+      appTray.setToolTip(tunnel && tunnel.startsWith('http') ? `Host: ${tunnel}` : 'Iris Host — running');
+      appTray.setContextMenu(Menu.buildFromTemplate([
+        { label: 'Host running on port 3001', enabled: false },
+        { label: short, enabled: false },
+        { type: 'separator' },
+        {
+          label: 'Copy tunnel URL',
+          enabled: !!(tunnel && String(tunnel).startsWith('http')),
+          click: () => {
+            if (tunnel && String(tunnel).startsWith('http')) {
+              require('electron').clipboard.writeText(String(tunnel));
+            }
+          }
+        },
+        {
+          label: 'Open URL file',
+          click: () => {
+            const f = path.join(process.env.DISCORD_LITE_DATA || app.getPath('userData'), 'Iris-Host-URL.txt');
+            const desktop = path.join(require('os').homedir(), 'Desktop', 'Iris-Host-URL.txt');
+            const target = fs.existsSync(desktop) ? desktop : f;
+            if (fs.existsSync(target)) require('electron').shell.openPath(target);
+          }
+        },
+        { type: 'separator' },
+        { label: 'Refresh URL', click: () => rebuild() },
+        { label: 'Stop Host', click: () => app.quit() },
+      ]));
+    };
+
+    rebuild();
+    setInterval(rebuild, 15000);
   } catch (e) {
     console.warn('Host tray setup failed', e);
   }
