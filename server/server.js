@@ -941,8 +941,16 @@ app.get("/channels/:serverId", async (req, res) => {
   try {
     const username = req.query.username || "";
     const payload = await listChannelsForUser(req.params.serverId, username);
-    res.json(payload);
+    // Plain array keeps older Iris installs working (they expect channels.find/filter).
+    res.json(payload.channels);
   } catch { res.status(500).json({ error: "Failed to load channels" }); }
+});
+
+app.get("/categories/:serverId", async (req, res) => {
+  try {
+    const categories = await ensureServerCategories(req.params.serverId);
+    res.json(categories);
+  } catch { res.status(500).json({ error: "Failed to load categories" }); }
 });
 
 app.post("/create-category", async (req, res) => {

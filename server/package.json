@@ -1,7 +1,7 @@
 {
   "name": "iris",
   "productName": "Iris",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Iris — Greek messenger chat for friends",
   "main": "main.js",
   "scripts": {

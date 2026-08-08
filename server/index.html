@@ -1703,12 +1703,42 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      color: #96989d;
+      color: #6d6f78;
       text-align: center;
-      gap: 12px;
+      gap: 10px;
+      padding: 32px 24px;
+      pointer-events: none;
+      user-select: none;
     }
-    .welcome-msg .icon { font-size: 48px; }
-    .welcome-msg h2 { color: white; font-size: 20px; }
+    .welcome-msg .icon {
+      font-size: 40px;
+      opacity: 0.45;
+      filter: grayscale(0.4);
+    }
+    .welcome-msg h2 {
+      color: #b5bac1;
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0;
+    }
+    .welcome-msg p {
+      color: #6d6f78;
+      font-size: 14px;
+      max-width: 280px;
+      line-height: 1.45;
+      margin: 0;
+    }
+    body.no-channel-selected .channel-item.active {
+      background: transparent;
+      color: #949ba4;
+    }
+    body.no-channel-selected .channel-item:hover {
+      background: rgba(255,255,255,0.06);
+      color: #dbdee1;
+    }
+    body.no-channel-selected .messages {
+      background: #1e1f22;
+    }
 
     .type-radio { display: flex; gap: 12px; margin-bottom: 12px; }
     .type-radio label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; }
@@ -4322,26 +4352,40 @@
     }
   }
 
+  function showNoChannelSelected(serverName) {
+    currentChannelId = null;
+    document.body.classList.add("no-channel-selected");
+    const name = serverName || currentServerName || "this server";
+    document.getElementById("serverTitle").textContent = name;
+    document.getElementById("topbarPrefix").textContent = "🏠";
+    document.getElementById("messagesWrap").innerHTML = `
+      <div class="welcome-msg" id="welcomeMsg">
+        <div class="icon">💬</div>
+        <h2>No channel selected</h2>
+        <p>Pick a text channel on the left to start chatting in ${escHtml(name)}.</p>
+      </div>`;
+    document.getElementById("messageInput").placeholder = "Select a channel first...";
+    document.getElementById("messageInput").disabled = true;
+    const pollOnServer = document.getElementById("pollBtn");
+    if (pollOnServer) pollOnServer.classList.add("hidden");
+    try { renderChannels(); } catch (_) {}
+  }
+
   async function openServer(serverId, serverName) {
     currentServerId = serverId;
     currentServerName = serverName;
+    currentChannelId = null;
     currentDmKey = null;
     currentDmTarget = "";
     localStorage.setItem("currentServerId", serverId);
 
     document.getElementById("sidebarTitle").textContent = serverName;
-    document.getElementById("serverTitle").textContent = serverName;
-    document.getElementById("topbarPrefix").textContent = "🏠";
     document.getElementById("channelListWrap").classList.remove("hidden");
     document.getElementById("dmListWrap").classList.add("hidden");
     document.getElementById("dmHeaderRow").style.display = "none";
     const addBtn = document.getElementById("sidebarAddBtn");
     if (addBtn) addBtn.classList.add("hidden");
-    document.getElementById("messagesWrap").innerHTML = `<div class="welcome-msg"><div class="icon">🏠</div><h2>${serverName}</h2><p>Select a channel to start chatting</p></div>`;
-    document.getElementById("messageInput").placeholder = "Select a channel first...";
-    document.getElementById("messageInput").disabled = true;
-    const pollOnServer = document.getElementById("pollBtn");
-    if (pollOnServer) pollOnServer.classList.add("hidden");
+    showNoChannelSelected(serverName);
 
     renderServerIcons();
     socket.emit("join_server", serverId);
@@ -4391,6 +4435,7 @@
   function openDmView() {
     currentServerId = null;
     currentChannelId = null;
+    document.body.classList.remove("no-channel-selected");
     document.getElementById("sidebarTitle").textContent = "Direct Messages";
     document.getElementById("channelListWrap").classList.add("hidden");
     document.getElementById("dmListWrap").classList.remove("hidden");
@@ -4760,19 +4805,29 @@
   }
 
   async function loadChannels() {
-    const res = await fetch(`${SERVER}/channels/${currentServerId}?username=${encodeURIComponent(username)}`);
-    const data = await res.json();
+    const q = `username=${encodeURIComponent(username)}`;
+    const [chRes, catRes] = await Promise.all([
+      fetch(`${SERVER}/channels/${currentServerId}?${q}`),
+      fetch(`${SERVER}/categories/${currentServerId}`),
+    ]);
+    const data = await chRes.json();
+    // Compat: array (current/legacy host) or { channels, categories } (brief middle format)
     if (Array.isArray(data)) {
       channels = data;
-      channelCategories = [];
     } else {
-      channels = data.channels || [];
-      channelCategories = data.categories || [];
+      channels = (data && data.channels) || [];
+    }
+    try {
+      const cats = await catRes.json();
+      channelCategories = Array.isArray(cats) ? cats : (cats && cats.categories) || [];
+    } catch (_) {
+      channelCategories = (!Array.isArray(data) && data && data.categories) || [];
     }
     renderChannels();
     if (!currentChannelId) {
       const first = channels.find(c => c.type === "text");
       if (first) openChannel(first.id, first.name, "text");
+      else showNoChannelSelected(currentServerName);
     }
   }
 
@@ -4846,7 +4901,7 @@
 
   function channelItemHtml(c, canManage) {
     const isText = c.type === "text";
-    const active = c.id === currentChannelId ? "active" : "";
+    const active = (currentChannelId && c.id === currentChannelId) ? "active" : "";
     const safe = escHtml(c.name).replace(/'/g, "&#39;");
     const click = isText
       ? `openChannel(${c.id}, '${safe}', 'text')`
@@ -5023,6 +5078,7 @@
     currentChannelId = channelId;
     currentChannelType = type;
     currentDmKey = null;
+    document.body.classList.remove("no-channel-selected");
 
     document.getElementById("serverTitle").textContent = channelName;
     document.getElementById("topbarPrefix").textContent = "#";
@@ -5098,7 +5154,7 @@
     });
     const data = await res.json();
     if (data.message) {
-      if (currentChannelId === channelId) { currentChannelId = null; document.getElementById("messagesWrap").innerHTML = ""; }
+      if (currentChannelId === channelId) showNoChannelSelected(currentServerName);
       await loadChannels();
     } else { alert(data.error); }
   }
@@ -5426,6 +5482,7 @@
     inVoiceChannel = true;
     currentVoiceChannelId = channelId;
     currentChannelId = channelId;
+    document.body.classList.remove("no-channel-selected");
 
     document.getElementById("vcPanel").classList.remove("hidden");
     document.getElementById("vcChannelName").textContent = channelName;
