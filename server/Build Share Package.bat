@@ -1,9 +1,9 @@
-@echo off
+﻿@echo off
 cd /d "%~dp0"
-title Building Discord Lite share package
+title Building Iris share package
 
 echo.
-echo === Discord Lite — Build share package ===
+echo === Iris — Build share package ===
 echo.
 
 where node >nul 2>&1
@@ -33,15 +33,15 @@ echo Restoring local sqlite3 bindings...
 call npm rebuild sqlite3 >nul 2>&1
 
 if not exist "Share" mkdir Share
-copy /Y "dist\Discord-Lite-Portable.exe" "Share\Discord-Lite-Portable.exe" >nul
-copy /Y "dist\Discord-Lite-Portable.exe" "%USERPROFILE%\Desktop\Discord-Lite-Portable.exe" >nul 2>&1
-copy /Y "dist\Discord-Lite-Portable.exe" "D:\Andrew\Desktop\Discord-Lite-Portable.exe" >nul 2>&1
+copy /Y "dist\Iris-Portable.exe" "Share\Iris-Portable.exe" >nul
+copy /Y "dist\Iris-Portable.exe" "%USERPROFILE%\Desktop\Iris-Portable.exe" >nul 2>&1
+copy /Y "dist\Iris-Portable.exe" "D:\Andrew\Desktop\Iris-Portable.exe" >nul 2>&1
 
 (
-  echo Discord Lite
+  echo Iris
   echo.
   echo How to use:
-  echo 1. Double-click Discord-Lite-Portable.exe
+  echo 1. Double-click Iris-Portable.exe
   echo 2. Create an account and chat
   echo.
   echo Notes:
@@ -51,7 +51,7 @@ copy /Y "dist\Discord-Lite-Portable.exe" "D:\Andrew\Desktop\Discord-Lite-Portabl
 
 echo.
 echo Done! Send this file to people:
-echo   %~dp0Share\Discord-Lite-Portable.exe
+echo   %~dp0Share\Iris-Portable.exe
 echo.
 explorer "%~dp0Share"
 pause

@@ -1,4 +1,4 @@
-const bcrypt = require("bcryptjs");
+﻿const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const express = require("express");
 const http = require("http");
@@ -10,6 +10,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const { spawn } = require("child_process");
 
 // Data dir: local folder in dev, or Electron userData when packaged/shared
 const DATA_DIR = process.env.DISCORD_LITE_DATA
@@ -46,7 +47,7 @@ const sequelize = new Sequelize({
   logging: false,
 });
 
-// ── Models ────────────────────────────────────────────────────────────────────
+// --- Models ---
 
 const User = sequelize.define("User", {
   username: { type: DataTypes.STRING, allowNull: false, unique: true },
@@ -54,8 +55,37 @@ const User = sequelize.define("User", {
   avatarColor: { type: DataTypes.STRING, allowNull: false, defaultValue: "#5865f2" },
   bio: { type: DataTypes.TEXT, allowNull: true, defaultValue: "" },
   avatarUrl: { type: DataTypes.STRING, allowNull: true },
-  nowPlaying: { type: DataTypes.STRING, allowNull: true },
+  nowPlaying: { type: DataTypes.STRING, allowNull: true }, // custom status text
+  displayName: { type: DataTypes.STRING, allowNull: true },
+  bannerColor: { type: DataTypes.STRING, allowNull: true },
+  nameFont: { type: DataTypes.STRING, allowNull: false, defaultValue: "default" },
 });
+
+function publicProfile(user) {
+  if (!user) {
+    return {
+      displayName: "",
+      bannerColor: "#5865f2",
+      nameFont: "default",
+      customStatus: "",
+      nowPlaying: "",
+      avatarColor: "#5865f2",
+      bio: "",
+      avatarUrl: null,
+    };
+  }
+  const customStatus = user.nowPlaying || "";
+  return {
+    displayName: user.displayName || user.username,
+    bannerColor: user.bannerColor || user.avatarColor || "#5865f2",
+    nameFont: user.nameFont || "default",
+    customStatus,
+    nowPlaying: customStatus,
+    avatarColor: user.avatarColor || "#5865f2",
+    bio: user.bio || "",
+    avatarUrl: user.avatarUrl || null,
+  };
+}
 
 const ChatServer = sequelize.define("ChatServer", {
   name: { type: DataTypes.STRING, allowNull: false },
@@ -214,7 +244,7 @@ const ServerRole = sequelize.define("ServerRole", {
   canManageRoles:     { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
 });
 
-// ── HTTP / Socket.io ──────────────────────────────────────────────────────────
+// --- HTTP / Socket.io ---
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -256,10 +286,7 @@ async function emitServerMembers(serverId) {
     customRole: member.customRoleId ? roleMap[member.customRoleId] || null : null,
     online: onlineUsers.has(member.username),
     status: userStatuses.get(member.username) || (onlineUsers.has(member.username) ? "online" : "offline"),
-    nowPlaying: userMap[member.username]?.nowPlaying || "",
-    avatarColor: userMap[member.username]?.avatarColor || "#5865f2",
-    bio: userMap[member.username]?.bio || "",
-    avatarUrl: userMap[member.username]?.avatarUrl || null,
+    ...publicProfile(userMap[member.username]),
   }));
   io.to(`server_${serverId}`).emit("server_members", result);
 }
@@ -300,7 +327,7 @@ async function emitVoiceState(channelId) {
   io.emit("voice_state", { channelId: key, users: usersWithState });
 }
 
-// ── Socket.io ─────────────────────────────────────────────────────────────────
+// --- Socket.io ---
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
@@ -506,6 +533,27 @@ io.on("connection", (socket) => {
     await emitVoiceState(channelId);
   });
 
+  // Mods: move a user to another voice channel
+  socket.on("mod_move_voice", async ({ fromChannelId, toChannelId, toChannelName, target, by }) => {
+    if (!fromChannelId || !toChannelId || !target || !by) return;
+    if (target === by) return;
+    const fromCh = await Channel.findByPk(fromChannelId);
+    const toCh = await Channel.findByPk(toChannelId);
+    if (!fromCh || !toCh) return;
+    if (String(fromCh.serverId) !== String(toCh.serverId)) return;
+    if (toCh.type !== "voice") return;
+    if (!await hasPerm(fromCh.serverId, by, "canKickMembers")) return;
+    const fromKey = String(fromChannelId);
+    if (!voiceRooms.has(fromKey) || !voiceRooms.get(fromKey).has(target)) return;
+    if (!(await memberCanAccessChannel(toCh, target))) return;
+    io.to(`user_${target}`).emit("force_move_voice", {
+      fromChannelId: fromKey,
+      toChannelId: String(toChannelId),
+      toChannelName: toChannelName || toCh.name || "Voice",
+      by,
+    });
+  });
+
   socket.on("voice_offer", ({ targetSocketId, offer, from }) => { io.to(targetSocketId).emit("voice_offer", { offer, from, socketId: socket.id }); });
   socket.on("voice_answer", ({ targetSocketId, answer }) => { io.to(targetSocketId).emit("voice_answer", { answer, socketId: socket.id }); });
   socket.on("voice_ice", ({ targetSocketId, candidate }) => { io.to(targetSocketId).emit("voice_ice", { candidate, socketId: socket.id }); });
@@ -547,7 +595,7 @@ io.on("connection", (socket) => {
     io.to(targetSocketId).emit("screen_ice", { candidate, socketId: socket.id });
   });
 
-  // ── Reactions ────────────────────────────────────────────────────────────
+  // --- Reactions ---
   socket.on("add_reaction", async ({ messageId, emoji, username, channelId, dmKey: dk }) => {
     const existing = await Reaction.findOne({ where: { messageId, emoji, username } });
     if (existing) return; // already reacted
@@ -570,7 +618,7 @@ io.on("connection", (socket) => {
     else if (dk) io.to(`dm_${dk}`).emit("reaction_update", { messageId, reactions: grouped });
   });
 
-  // ── User status ──────────────────────────────────────────────────────────
+  // --- User status ---
   socket.on("set_status", ({ username, status }) => {
     if (!["online","away","dnd","invisible"].includes(status)) return;
     userStatuses.set(username, status);
@@ -578,7 +626,7 @@ io.on("connection", (socket) => {
     io.emit("user_status_changed", { username, status: status === "invisible" ? "offline" : status });
   });
 
-  // ── Voice speaking indicator ─────────────────────────────────────────────
+  // --- Voice speaking indicator ---
   socket.on("voice_speaking", ({ channelId, username, speaking }) => {
     socket.to(`voice_${channelId}`).emit("voice_speaking", { username, speaking });
   });
@@ -607,9 +655,9 @@ io.on("connection", (socket) => {
   });
 });
 
-// ── REST Routes ───────────────────────────────────────────────────────────────
+// --- REST Routes ---
 
-app.get("/", (req, res) => res.send("Server is running 🚀"));
+app.get("/", (req, res) => res.send("Server is running"));
 
 app.post("/register", async (req, res) => {
   try {
@@ -632,19 +680,40 @@ app.post("/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
     const token = jwt.sign({ username }, SECRET, { expiresIn: "30d" });
-    res.json({ token, username, avatarColor: user.avatarColor, bio: user.bio, avatarUrl: user.avatarUrl || null });
+    res.json({
+      token,
+      username,
+      ...publicProfile(user),
+    });
   } catch { res.status(500).json({ error: "Login failed" }); }
 });
 
 app.post("/update-profile", async (req, res) => {
   try {
-    const { username, avatarColor, bio } = req.body;
+    const { username, avatarColor, bio, displayName, bannerColor, nameFont, customStatus, nowPlaying } = req.body;
     const user = await User.findOne({ where: { username } });
     if (!user) return res.status(404).json({ error: "User not found" });
     if (avatarColor) user.avatarColor = avatarColor;
     if (bio !== undefined) user.bio = bio;
+    if (displayName !== undefined) {
+      const cleaned = String(displayName || "").trim().slice(0, 32);
+      user.displayName = cleaned || null;
+    }
+    if (bannerColor !== undefined) user.bannerColor = bannerColor || null;
+    if (nameFont !== undefined) {
+      const allowed = ["default", "serif", "mono", "rounded", "display"];
+      user.nameFont = allowed.includes(nameFont) ? nameFont : "default";
+    }
+    if (customStatus !== undefined || nowPlaying !== undefined) {
+      user.nowPlaying = String(customStatus ?? nowPlaying ?? "").trim().slice(0, 128) || null;
+    }
     await user.save();
-    res.json({ message: "Profile updated", avatarColor: user.avatarColor, bio: user.bio });
+    const profile = publicProfile(user);
+    io.emit("profile_update", { username: user.username, ...profile });
+    // refresh member lists for all servers this user is in
+    const memberships = await ServerMember.findAll({ where: { username: user.username } });
+    for (const m of memberships) await emitServerMembers(m.serverId);
+    res.json({ message: "Profile updated", ...profile });
   } catch { res.status(500).json({ error: "Failed to update profile" }); }
 });
 
@@ -736,21 +805,101 @@ app.post("/invite-user", async (req, res) => {
     const serverRecord = await ChatServer.findByPk(serverId);
     if (!serverRecord) return res.status(404).json({ error: "Server not found" });
     const inviterMembership = await ServerMember.findOne({ where: { serverId, username: invitedBy } });
-    if (!inviterMembership || !["owner", "admin"].includes(inviterMembership.role)) return res.status(403).json({ error: "Only owner or admin can invite" });
+    if (!inviterMembership) return res.status(403).json({ error: "Not a member" });
+    // Owner/admin always; custom role may deny; plain members can invite (same as invite links)
+    const isMod = ["owner", "admin"].includes(inviterMembership.role);
+    let canInvite = isMod;
+    if (!canInvite && inviterMembership.customRoleId) {
+      const role = await ServerRole.findByPk(inviterMembership.customRoleId);
+      canInvite = !role || role.canInviteMembers !== false;
+    } else if (!canInvite) {
+      canInvite = true;
+    }
+    if (!canInvite) return res.status(403).json({ error: "No permission to invite" });
     const invitedUser = await User.findOne({ where: { username: usernameToInvite } });
     if (!invitedUser) return res.status(404).json({ error: "User does not exist" });
     const existing = await ServerMember.findOne({ where: { serverId, username: usernameToInvite } });
     if (existing) return res.status(400).json({ error: "User is already a member" });
     const existingInvite = await Invite.findOne({ where: { serverId, invitedUsername: usernameToInvite, status: "pending" } });
     if (existingInvite) return res.status(400).json({ error: "Invite already pending" });
-    await Invite.create({ serverId, serverName: serverRecord.name, invitedUsername: usernameToInvite, invitedBy, status: "pending" });
-    res.json({ message: "Invite sent" });
+    const created = await Invite.create({ serverId, serverName: serverRecord.name, invitedUsername: usernameToInvite, invitedBy, status: "pending" });
+    // Deliver like Discord: invite appears as a DM card from the inviter
+    const key = dmKey(invitedBy, usernameToInvite);
+    let thread = await DirectMessage.findOne({ where: { dmKey: key } });
+    if (!thread) {
+      thread = await DirectMessage.create({ user1: invitedBy, user2: usernameToInvite, dmKey: key, isGroup: false });
+    }
+    const invitePayload = {
+      inviteId: created.id,
+      serverId: Number(serverId),
+      serverName: serverRecord.name,
+      iconUrl: serverRecord.iconUrl || null,
+      invitedBy
+    };
+    const inviteMsg = `[IRIS_INVITE]${JSON.stringify(invitePayload)}`;
+    const saved = await Message.create({ dmKey: key, username: invitedBy, message: inviteMsg });
+    const savedJson = {
+      ...saved.toJSON(),
+      avatarColor: null,
+      avatarUrl: null,
+      displayName: invitedBy
+    };
+    const inviterUser = await User.findOne({ where: { username: invitedBy } });
+    if (inviterUser) {
+      savedJson.avatarColor = inviterUser.avatarColor;
+      savedJson.avatarUrl = inviterUser.avatarUrl;
+      savedJson.displayName = inviterUser.displayName || invitedBy;
+    }
+    io.to(`dm_${key}`).emit("receive_message", savedJson);
+    io.to(`user_${usernameToInvite}`).emit("receive_message", savedJson);
+    io.to(`user_${invitedBy}`).emit("receive_message", savedJson);
+    io.to(`user_${usernameToInvite}`).emit("server_invite", {
+      id: created.id,
+      serverId: Number(serverId),
+      serverName: serverRecord.name,
+      invitedBy,
+      dmKey: key,
+      iconUrl: serverRecord.iconUrl || null
+    });
+    res.json({ message: "Invite sent", inviteId: created.id, dmKey: key });
   } catch { res.status(500).json({ error: "Failed to invite user" }); }
 });
 
 app.get("/invites/:username", async (req, res) => {
   try {
     const invites = await Invite.findAll({ where: { invitedUsername: req.params.username, status: "pending" }, order: [["createdAt", "DESC"]] });
+    // Backfill Discord-style DM invite cards for older pending invites
+    for (const inv of invites) {
+      try {
+        const key = dmKey(inv.invitedBy, inv.invitedUsername);
+        let thread = await DirectMessage.findOne({ where: { dmKey: key } });
+        if (!thread) {
+          thread = await DirectMessage.create({ user1: inv.invitedBy, user2: inv.invitedUsername, dmKey: key, isGroup: false });
+        }
+        const marker = `[IRIS_INVITE]{"inviteId":${inv.id}`;
+        const existingMsg = await Message.findOne({
+          where: {
+            dmKey: key,
+            message: { [Op.like]: marker + "%" }
+          }
+        });
+        if (!existingMsg) {
+          const srv = await ChatServer.findByPk(inv.serverId);
+          const payload = {
+            inviteId: inv.id,
+            serverId: inv.serverId,
+            serverName: inv.serverName,
+            iconUrl: srv?.iconUrl || null,
+            invitedBy: inv.invitedBy
+          };
+          await Message.create({
+            dmKey: key,
+            username: inv.invitedBy,
+            message: `[IRIS_INVITE]${JSON.stringify(payload)}`
+          });
+        }
+      } catch (_) {}
+    }
     res.json(invites);
   } catch { res.status(500).json({ error: "Failed to load invites" }); }
 });
@@ -761,7 +910,7 @@ app.post("/accept-invite", async (req, res) => {
     const invite = await Invite.findByPk(inviteId);
     if (!invite) return res.status(404).json({ error: "Invite not found" });
     if (invite.invitedUsername !== username) return res.status(403).json({ error: "Not your invite" });
-    // Feature 6: check if banned
+    if (invite.status !== "pending") return res.status(400).json({ error: "Invite is no longer pending" });
     const banned = await Ban.findOne({ where: { serverId: String(invite.serverId), username } });
     if (banned) return res.status(403).json({ error: "You are banned from this server" });
     const existing = await ServerMember.findOne({ where: { serverId: invite.serverId, username } });
@@ -769,8 +918,29 @@ app.post("/accept-invite", async (req, res) => {
     invite.status = "accepted";
     await invite.save();
     await emitServerMembers(invite.serverId);
-    res.json({ message: "Joined server" });
+    io.to(`user_${username}`).emit("server_invite_resolved", { inviteId: invite.id, status: "accepted", serverId: invite.serverId });
+    if (invite.invitedBy) {
+      io.to(`user_${invite.invitedBy}`).emit("server_invite_resolved", { inviteId: invite.id, status: "accepted", serverId: invite.serverId });
+    }
+    res.json({ message: "Joined server", serverId: invite.serverId, serverName: invite.serverName });
   } catch { res.status(500).json({ error: "Failed to accept invite" }); }
+});
+
+app.post("/decline-invite", async (req, res) => {
+  try {
+    const { inviteId, username } = req.body;
+    const invite = await Invite.findByPk(inviteId);
+    if (!invite) return res.status(404).json({ error: "Invite not found" });
+    if (invite.invitedUsername !== username) return res.status(403).json({ error: "Not your invite" });
+    if (invite.status !== "pending") return res.status(400).json({ error: "Invite is no longer pending" });
+    invite.status = "declined";
+    await invite.save();
+    io.to(`user_${username}`).emit("server_invite_resolved", { inviteId: invite.id, status: "declined" });
+    if (invite.invitedBy) {
+      io.to(`user_${invite.invitedBy}`).emit("server_invite_resolved", { inviteId: invite.id, status: "declined" });
+    }
+    res.json({ message: "Invite declined" });
+  } catch { res.status(500).json({ error: "Failed to decline invite" }); }
 });
 
 app.get("/server-members/:serverId/:username", async (req, res) => {
@@ -789,10 +959,7 @@ app.get("/server-members/:serverId/:username", async (req, res) => {
       customRole: m.customRoleId ? roleMap[m.customRoleId] || null : null,
       online: onlineUsers.has(m.username),
       status: userStatuses.get(m.username) || (onlineUsers.has(m.username) ? "online" : "offline"),
-      nowPlaying: userMap[m.username]?.nowPlaying || "",
-      avatarColor: userMap[m.username]?.avatarColor || "#5865f2",
-      bio: userMap[m.username]?.bio || "",
-      avatarUrl: userMap[m.username]?.avatarUrl || null,
+      ...publicProfile(userMap[m.username]),
     }));
     res.json({ myRole: myMembership.role, members: result });
   } catch { res.status(500).json({ error: "Failed to load members" }); }
@@ -831,7 +998,7 @@ app.post("/delete-server", async (req, res) => {
   } catch { res.status(500).json({ error: "Failed to delete server" }); }
 });
 
-// ── Custom Roles ───────────────────────────────────────────────────────────────
+// --- Custom Roles ---
 
 app.get("/server-roles/:serverId", async (req, res) => {
   try {
@@ -1091,12 +1258,19 @@ app.get("/friends/:username", async (req, res) => {
     const accepted = await FriendRequest.findAll({ where: { status: "accepted", [Op.or]: [{ from: username }, { to: username }] } });
     const friendNames = accepted.map(r => r.from === username ? r.to : r.from);
     const users = await User.findAll({ where: { username: friendNames } });
-    const result = users.map(u => ({ username: u.username, avatarColor: u.avatarColor, bio: u.bio, online: onlineUsers.has(u.username) }));
+    const result = users.map(u => ({
+      username: u.username,
+      displayName: u.displayName || u.username,
+      avatarColor: u.avatarColor,
+      avatarUrl: u.avatarUrl || null,
+      bio: u.bio,
+      online: onlineUsers.has(u.username)
+    }));
     res.json(result);
   } catch { res.status(500).json({ error: "Failed to load friends" }); }
 });
 
-// ── Feature 5: Pinned Messages ────────────────────────────────────────────────
+// --- Feature 5: Pinned Messages ---
 
 app.post("/pin-message", async (req, res) => {
   try {
@@ -1131,7 +1305,7 @@ app.get("/pinned-messages/:channelId", async (req, res) => {
   } catch { res.status(500).json({ error: "Failed to load pinned messages" }); }
 });
 
-// ── Feature 6: Kick and Ban ───────────────────────────────────────────────────
+// --- Feature 6: Kick and Ban ---
 
 app.post("/kick-member", async (req, res) => {
   try {
@@ -1200,7 +1374,7 @@ app.post("/unban-member", async (req, res) => {
   } catch { res.status(500).json({ error: "Failed to unban member" }); }
 });
 
-// ── Feature 7: Link Preview ───────────────────────────────────────────────────
+// --- Feature 7: Link Preview ---
 
 function fetchUrl(targetUrl, redirects) {
   redirects = redirects || 0;
@@ -1244,7 +1418,7 @@ app.get("/link-preview", async (req, res) => {
   }
 });
 
-// ── Feature 8: Message Search ─────────────────────────────────────────────────
+// --- Feature 8: Message Search ---
 
 app.get("/search-messages", async (req, res) => {
   try {
@@ -1273,7 +1447,7 @@ app.get("/search-messages", async (req, res) => {
   } catch { res.status(500).json({ error: "Search failed" }); }
 });
 
-// ── Feature 9: Server Icon Upload ────────────────────────────────────────────
+// --- Feature 9: Server Icon Upload ---
 
 app.post("/upload-server-icon", upload.single("file"), async (req, res) => {
   try {
@@ -1287,7 +1461,7 @@ app.post("/upload-server-icon", upload.single("file"), async (req, res) => {
   } catch { res.status(500).json({ error: "Failed to upload icon" }); }
 });
 
-// ── Feature 10: Avatar Upload ─────────────────────────────────────────────────
+// --- Feature 10: Avatar Upload ---
 
 app.post("/upload-avatar", upload.single("file"), async (req, res) => {
   try {
@@ -1319,7 +1493,7 @@ app.use((err, req, res, next) => {
   next(err);
 });
 
-// ── Reactions ─────────────────────────────────────────────────────────────────
+// --- Reactions ---
 
 app.get("/reactions/:messageId", async (req, res) => {
   try {
@@ -1330,7 +1504,7 @@ app.get("/reactions/:messageId", async (req, res) => {
   } catch { res.status(500).json({}); }
 });
 
-// ── Audit Log ─────────────────────────────────────────────────────────────────
+// --- Audit Log ---
 
 app.get("/audit-log/:serverId", async (req, res) => {
   try {
@@ -1343,7 +1517,7 @@ app.get("/audit-log/:serverId", async (req, res) => {
   } catch { res.status(500).json([]); }
 });
 
-// ── Server Templates ───────────────────────────────────────────────────────────
+// --- Server Templates ---
 
 const SERVER_TEMPLATES = {
   gaming: {
@@ -1394,7 +1568,7 @@ app.post("/create-server", async (req, res) => {
   } catch { res.status(500).json({ error: "Failed to create server" }); }
 });
 
-// ── Auth Middleware ───────────────────────────────────────────────────────────
+// --- Auth Middleware ---
 
 function auth(req, res, next) {
   const header = req.headers.authorization || "";
@@ -1409,7 +1583,7 @@ function auth(req, res, next) {
   }
 }
 
-// ── Invites ───────────────────────────────────────────────────────────────────
+// --- Invites ---
 
 app.post("/create-invite", auth, async (req, res) => {
   const { serverId } = req.body;
@@ -1439,7 +1613,7 @@ app.post("/join-invite", auth, async (req, res) => {
   res.json({ serverId: invite.serverId, joined: true });
 });
 
-// ── Block ─────────────────────────────────────────────────────────────────────
+// --- Block ---
 
 app.post("/block", auth, async (req, res) => {
   const { target } = req.body;
@@ -1458,7 +1632,7 @@ app.get("/blocks/:username", async (req, res) => {
   res.json(blocks.map(b => b.blocked));
 });
 
-// ── Polls ─────────────────────────────────────────────────────────────────────
+// --- Polls ---
 
 app.post("/poll/create", auth, async (req, res) => {
   const { channelId, dmKey, serverId, question, options } = req.body;
@@ -1481,7 +1655,7 @@ app.get("/poll/:id", async (req, res) => {
   res.json({ ...poll.toJSON(), options: JSON.parse(poll.options), votes: votes.map(v => ({ username: v.username, optionIdx: v.optionIdx })) });
 });
 
-// ── Custom Emoji ──────────────────────────────────────────────────────────────
+// --- Custom Emoji ---
 
 app.post("/emoji/upload", auth, upload.single("file"), async (req, res) => {
   const { serverId, name } = req.body;
@@ -1501,7 +1675,7 @@ app.delete("/emoji/:id", auth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// ── Read Receipts ─────────────────────────────────────────────────────────────
+// --- Read Receipts ---
 
 app.post("/read-receipt", auth, async (req, res) => {
   const { dmKey, lastReadId } = req.body;
@@ -1515,16 +1689,27 @@ app.get("/read-receipt/:dmKey", auth, async (req, res) => {
   res.json(receipts);
 });
 
-// ── Now Playing ───────────────────────────────────────────────────────────────
+// --- Custom Status (stored in nowPlaying column) ---
 
 app.post("/now-playing", auth, async (req, res) => {
-  const { nowPlaying } = req.body;
-  await User.update({ nowPlaying }, { where: { username: req.user } });
-  io.emit("now_playing_update", { username: req.user, nowPlaying });
-  res.json({ ok: true });
+  const status = String(req.body.customStatus ?? req.body.nowPlaying ?? "").trim().slice(0, 128);
+  await User.update({ nowPlaying: status || null }, { where: { username: req.user } });
+  io.emit("now_playing_update", { username: req.user, nowPlaying: status, customStatus: status });
+  const memberships = await ServerMember.findAll({ where: { username: req.user } });
+  for (const m of memberships) await emitServerMembers(m.serverId);
+  res.json({ ok: true, customStatus: status });
 });
 
-// ── Server Discovery ──────────────────────────────────────────────────────────
+app.post("/custom-status", auth, async (req, res) => {
+  const status = String(req.body.customStatus ?? req.body.nowPlaying ?? "").trim().slice(0, 128);
+  await User.update({ nowPlaying: status || null }, { where: { username: req.user } });
+  io.emit("now_playing_update", { username: req.user, nowPlaying: status, customStatus: status });
+  const memberships = await ServerMember.findAll({ where: { username: req.user } });
+  for (const m of memberships) await emitServerMembers(m.serverId);
+  res.json({ ok: true, customStatus: status });
+});
+
+// --- Server Discovery ---
 
 app.get("/discover", async (req, res) => {
   const servers = await ChatServer.findAll({ where: { isPublic: true } });
@@ -1566,6 +1751,7 @@ let publicTunnel = null;
 let tunnelUrl = null;
 let tunnelStarting = false;
 let tunnelError = null;
+let tunnelStopRequested = false;
 
 async function ensureCloudflared() {
   const { bin, install } = require("cloudflared");
@@ -1573,38 +1759,88 @@ async function ensureCloudflared() {
     console.log("Installing cloudflared binary…");
     await install(bin);
   }
+  return bin;
+}
+
+function publishTunnelUrl(url) {
+  if (!url) return;
+  tunnelUrl = url;
+  writeHostUrlFile(url);
+  try { io.emit("host_tunnel_url", { url }); } catch (_) {}
+}
+
+function scheduleTunnelRestart(reason) {
+  if (tunnelStopRequested) return;
+  console.warn("Tunnel ended:", reason || "unknown", "— restarting in 3s…");
+  setTimeout(() => {
+    if (tunnelStopRequested) return;
+    startPublicTunnel().catch((e) => console.error("Tunnel restart failed:", e.message || e));
+  }, 3000);
+}
+
+async function startNamedCloudflareTunnel(token) {
+  const bin = await ensureCloudflared();
+  const configuredUrl = (process.env.CLOUDFLARE_TUNNEL_URL || process.env.DISCORD_LITE_TUNNEL_URL || "").trim();
+  const child = spawn(bin, ["tunnel", "--no-autoupdate", "run", "--token", token], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  publicTunnel = {
+    stop() { try { child.kill(); } catch (_) {} },
+    close() { try { child.kill(); } catch (_) {} },
+  };
+  child.on("exit", () => {
+    if (publicTunnel && publicTunnel.stop) {
+      publicTunnel = null;
+      tunnelUrl = null;
+      scheduleTunnelRestart("named tunnel exit");
+    }
+  });
+  if (configuredUrl) {
+    publishTunnelUrl(configuredUrl.replace(/\/$/, ""));
+    console.log("Named Cloudflare tunnel (stable URL):", tunnelUrl);
+    return tunnelUrl;
+  }
+  console.warn("Named tunnel token set, but CLOUDFLARE_TUNNEL_URL is empty — set it to your https://hostname");
+  return null;
 }
 
 async function startPublicTunnel() {
   if (tunnelUrl) return tunnelUrl;
   if (tunnelStarting) {
-    // wait briefly for in-flight start
     for (let i = 0; i < 40 && tunnelStarting; i++) await new Promise((r) => setTimeout(r, 250));
     if (tunnelUrl) return tunnelUrl;
   }
   tunnelStarting = true;
+  tunnelStopRequested = false;
   tunnelError = null;
   try {
+    const namedToken = (process.env.CLOUDFLARE_TUNNEL_TOKEN || process.env.TUNNEL_TOKEN || "").trim();
+    if (namedToken) {
+      return await startNamedCloudflareTunnel(namedToken);
+    }
+
     await ensureCloudflared();
     const { Tunnel } = require("cloudflared");
     publicTunnel = Tunnel.quick("http://127.0.0.1:3001");
-    tunnelUrl = await new Promise((resolve, reject) => {
+    const url = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Tunnel timed out")), 90000);
-      publicTunnel.once("url", (url) => {
+      publicTunnel.once("url", (u) => {
         clearTimeout(timer);
-        resolve(url);
+        resolve(u);
       });
       publicTunnel.once("error", (err) => {
         clearTimeout(timer);
         reject(err);
       });
       publicTunnel.once("exit", () => {
-        tunnelUrl = null;
         publicTunnel = null;
+        tunnelUrl = null;
+        scheduleTunnelRestart("quick tunnel exit");
       });
     });
-    console.log("Public tunnel:", tunnelUrl);
-    writeHostUrlFile(tunnelUrl);
+    publishTunnelUrl(url);
+    console.log("Public tunnel (quick — changes on restart):", tunnelUrl);
     return tunnelUrl;
   } catch (err) {
     console.error("Cloudflare tunnel failed, trying localtunnel…", err.message || err);
@@ -1612,15 +1848,15 @@ async function startPublicTunnel() {
       const localtunnel = require("localtunnel");
       const t = await localtunnel({ port: 3001 });
       publicTunnel = t;
-      tunnelUrl = t.url;
       t.on("close", () => {
         if (publicTunnel === t) {
           publicTunnel = null;
           tunnelUrl = null;
+          scheduleTunnelRestart("localtunnel close");
         }
       });
+      publishTunnelUrl(t.url);
       console.log("Public tunnel (localtunnel):", tunnelUrl);
-      writeHostUrlFile(tunnelUrl);
       return tunnelUrl;
     } catch (err2) {
       tunnelError = (err2 && err2.message) || (err && err.message) || "Tunnel failed";
@@ -1634,24 +1870,28 @@ async function startPublicTunnel() {
 
 function writeHostUrlFile(url) {
   if (!url) return;
+  const named = !!(process.env.CLOUDFLARE_TUNNEL_TOKEN || process.env.TUNNEL_TOKEN);
   const body =
-    "Discord Lite — public host URL\r\n" +
+    "Iris — public host URL\r\n" +
     "================================\r\n" +
     "Share this with friends. They paste it as Server address.\r\n" +
     "\r\n" +
     url +
     "\r\n" +
     "\r\n" +
-    "Note: Cloudflare quick tunnels change after each host restart.\r\n" +
-    "If the host PC reboots, open this file again and re-share the new link.\r\n" +
+    (named
+      ? "This is a named Cloudflare tunnel (stable URL across restarts).\r\n"
+      : "Note: Cloudflare quick tunnels change after each host restart.\r\n" +
+        "For a stable URL, set CLOUDFLARE_TUNNEL_TOKEN + CLOUDFLARE_TUNNEL_URL.\r\n" +
+        "If the host PC reboots, open this file again and re-share the new link.\r\n") +
     "Updated: " + new Date().toISOString() + "\r\n";
   const targets = [];
   try {
-    targets.push(path.join(DATA_DIR, "Discord-Lite-Host-URL.txt"));
+    targets.push(path.join(DATA_DIR, "Iris-Host-URL.txt"));
   } catch (_) {}
   try {
     const desktop = path.join(os.homedir(), "Desktop");
-    targets.push(path.join(desktop, "Discord-Lite-Host-URL.txt"));
+    targets.push(path.join(desktop, "Iris-Host-URL.txt"));
   } catch (_) {}
   for (const file of targets) {
     try {
@@ -1665,6 +1905,7 @@ function writeHostUrlFile(url) {
 }
 
 function stopPublicTunnel() {
+  tunnelStopRequested = true;
   if (!publicTunnel) return;
   try {
     if (typeof publicTunnel.stop === "function") publicTunnel.stop();
@@ -1714,14 +1955,171 @@ app.post("/tunnel/stop", (req, res) => {
 
 app.get("/health", (req, res) => res.json({ ok: true, tunnelUrl }));
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// --- Tenor GIF proxy (v2) ---
+
+function getTenorApiKey() {
+  return (process.env.TENOR_API_KEY || process.env.DISCORD_LITE_TENOR_KEY || "").trim();
+}
+
+function normalizeTenorResults(payload) {
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  return results.map((item) => {
+    const formats = item.media_formats || {};
+    const preview =
+      formats.tinygif?.url ||
+      formats.nanogif?.url ||
+      formats.tinygif_transparent?.url ||
+      formats.gif?.url ||
+      "";
+    const url = formats.gif?.url || formats.mediumgif?.url || preview;
+    if (!preview || !url) return null;
+    return { preview, url, id: item.id, description: item.content_description || "" };
+  }).filter(Boolean);
+}
+
+async function fetchTenor(pathname, query = {}) {
+  const key = getTenorApiKey();
+  if (!key) {
+    const err = new Error("TENOR_API_KEY not configured");
+    err.code = "NO_KEY";
+    throw err;
+  }
+  const params = new URLSearchParams({
+    key,
+    client_key: "iris_chat",
+    media_filter: "gif,tinygif",
+    limit: String(query.limit || 21),
+  });
+  if (query.q) params.set("q", String(query.q));
+  const url = `https://tenor.googleapis.com/v2/${pathname}?${params.toString()}`;
+  const body = await fetchUrl(url);
+  return JSON.parse(body);
+}
+
+app.get("/gifs/featured", async (req, res) => {
+  try {
+    if (!getTenorApiKey()) {
+      return res.status(503).json({
+        error: "GIF search needs a Tenor API key — set TENOR_API_KEY on the host",
+        results: []
+      });
+    }
+    const data = await fetchTenor("featured", { limit: req.query.limit || 21 });
+    res.json({ results: normalizeTenorResults(data) });
+  } catch (e) {
+    if (e && e.code === "NO_KEY") {
+      return res.status(503).json({
+        error: "GIF search needs a Tenor API key — set TENOR_API_KEY on the host",
+        results: []
+      });
+    }
+    res.status(502).json({ error: "Could not load GIFs", results: [] });
+  }
+});
+
+app.get("/gifs/search", async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.json({ results: [] });
+    if (!getTenorApiKey()) {
+      return res.status(503).json({
+        error: "GIF search needs a Tenor API key — set TENOR_API_KEY on the host",
+        results: []
+      });
+    }
+    const data = await fetchTenor("search", { q, limit: req.query.limit || 21 });
+    res.json({ results: normalizeTenorResults(data) });
+  } catch (e) {
+    if (e && e.code === "NO_KEY") {
+      return res.status(503).json({
+        error: "GIF search needs a Tenor API key — set TENOR_API_KEY on the host",
+        results: []
+      });
+    }
+    res.status(502).json({ error: "GIF search failed", results: [] });
+  }
+});
+
+app.get("/ice-servers", (req, res) => {
+  const iceServers = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ];
+  // Optional custom TURN: DISCORD_LITE_TURN_URLS=turn:host:3478|user|pass;turns:host:443|user|pass
+  const custom = (process.env.DISCORD_LITE_TURN_URLS || "").trim();
+  if (custom) {
+    for (const part of custom.split(";")) {
+      const [urls, username, credential] = part.split("|").map((s) => (s || "").trim());
+      if (urls) iceServers.push({ urls, username: username || undefined, credential: credential || undefined });
+    }
+  } else {
+    // Public openrelay fallback (better NAT traversal for friends on different networks)
+    iceServers.push(
+      { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+      { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+      { urls: "turns:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+    );
+  }
+  res.json({ iceServers });
+});
+
+// --- Start ---
 
 let listening = false;
 
+/** Snapshot database.sqlite before schema sync / startup (keeps last 14). */
+function backupDatabaseOnStartup() {
+  try {
+    if (!fs.existsSync(DB_PATH)) {
+      console.log("No existing database yet — will create a new one at:");
+      console.log(" ", DB_PATH);
+      return;
+    }
+    const backupDir = path.join(DATA_DIR, "backups");
+    fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const dest = path.join(backupDir, `database-${stamp}.sqlite`);
+    fs.copyFileSync(DB_PATH, dest);
+    console.log("DB backup saved:", dest);
+
+    const keep = 14;
+    const files = fs.readdirSync(backupDir)
+      .filter((f) => f.startsWith("database-") && f.endsWith(".sqlite"))
+      .map((f) => ({ f, t: fs.statSync(path.join(backupDir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (const old of files.slice(keep)) {
+      try { fs.unlinkSync(path.join(backupDir, old.f)); } catch (_) {}
+    }
+  } catch (e) {
+    console.warn("DB backup skipped:", e.message || e);
+  }
+}
+
 function startServer() {
   if (listening) return Promise.resolve();
-  return sequelize.sync({ alter: true }).then(() => {
+  console.log("----------------------------------------");
+  console.log("Iris data folder:");
+  console.log(" ", DATA_DIR);
+  console.log("Database file:");
+  console.log(" ", DB_PATH);
+  console.log("----------------------------------------");
+  backupDatabaseOnStartup();
+  // Only ALTER schema when version marker is behind (avoids rewriting DB every boot)
+  const SCHEMA_VERSION = 5;
+  const schemaMarker = path.join(DATA_DIR, ".schema-version");
+  let doAlter = true;
+  try {
+    const cur = parseInt(fs.readFileSync(schemaMarker, "utf8"), 10);
+    if (cur >= SCHEMA_VERSION) doAlter = false;
+  } catch (_) {}
+  if (process.env.DISCORD_LITE_DB_ALTER === "1") doAlter = true;
+  if (process.env.DISCORD_LITE_DB_ALTER === "0") doAlter = false;
+  if (doAlter) console.log("DB schema sync: alter=true (version bump or first run)");
+  else console.log("DB schema sync: alter=false (schema up to date)");
+
+  return sequelize.sync({ alter: doAlter }).then(() => {
     console.log("Database synced");
+    try { fs.writeFileSync(schemaMarker, String(SCHEMA_VERSION), "utf8"); } catch (_) {}
     return new Promise((resolve, reject) => {
       server.once("error", (err) => {
         if (err.code === "EADDRINUSE" || err.code === "EACCES") {

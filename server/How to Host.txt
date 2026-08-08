@@ -1,8 +1,8 @@
-DISCORD LITE — ALWAYS-ON HOST (SECOND PC)
+﻿Iris — ALWAYS-ON HOST (SECOND PC)
 ==========================================
 
 Use a dedicated PC that stays on. It runs the chat server only
-(no Discord Lite window). Everyone else connects as clients.
+(no Iris window). Everyone else connects as clients.
 
 ------------------------------------------------
 ONE-TIME SETUP ON THE HOST PC
@@ -14,19 +14,19 @@ ONE-TIME SETUP ON THE HOST PC
 
 2) Get the Host Pack (easiest)
    https://github.com/AndrewRaney/Discord-app/releases/latest
-   Download:  Discord-Lite-Host-….zip
-   Unzip anywhere (e.g. Desktop\Discord-Lite-Host)
+   Download:  Iris-Host-….zip
+   Unzip anywhere (e.g. Desktop\Iris-Host)
 
    Or clone/copy the "server" folder from the repo instead.
 
 3) Double-click:  Start Host.bat
    First run installs dependencies (npm install).
-   Prefer leaving the tray icon running ("Discord Lite Host — running").
+   Prefer leaving the tray icon running ("Iris Host — running").
    A console window may also stay open — leave it until you Stop Host.
    Wait until you see "Public tunnel: https://...."
 
 4) On the Desktop, open:
-     Discord-Lite-Host-URL.txt
+     Iris-Host-URL.txt
    Send that URL to your friends.
 
 5) Double-click:  Install Host Autostart.bat
@@ -40,13 +40,13 @@ ONE-TIME SETUP ON THE HOST PC
 MOVE EXISTING CHAT DATA ONTO THE HOST
 ------------------------------------------------
 
-If you already have accounts/messages on another Discord Lite install:
+If you already have accounts/messages on another Iris install:
 
 1) Stop Host.bat on the host PC
 2) Copy database.sqlite (and uploads folder if any) onto the host,
    OR run Migrate Data to Host.bat on the PC that has the data,
    then copy the resulting folder — simplest path:
-     - On the old PC: ensure Discord Lite was used (data in AppData)
+     - On the old PC: ensure Iris was used (data in AppData)
      - Copy "%APPDATA%\Discord Lite" contents, OR run
        Migrate Data to Host.bat there, then copy
        "%APPDATA%\Discord Lite Host" to the second PC's same path
@@ -58,11 +58,11 @@ If you already have accounts/messages on another Discord Lite install:
 EVERYONE ELSE (CLIENTS)
 ------------------------------------------------
 
-1) Install Discord Lite Setup from:
+1) Install Iris Setup from:
    https://github.com/AndrewRaney/Discord-app/releases/latest
 
 2) Paste the host URL into "Server address"
-   (from Discord-Lite-Host-URL.txt on the host PC)
+   (from Iris-Host-URL.txt on the host PC)
 
 3) Create Account / Sign in on THAT server.
    If you migrated the DB, use the same usernames/passwords.
@@ -72,20 +72,39 @@ DAY TO DAY
 ------------------------------------------------
 
 - Host PC: leave on, Start Host running (or autostart).
-- Clients: normal Discord Lite app + the host URL.
-- After the host PC reboots, open Discord-Lite-Host-URL.txt again —
+- Clients: normal Iris app + the host URL.
+- After the host PC reboots, open Iris-Host-URL.txt again —
   the public link can change. Re-share it if friends cannot connect.
+- Optional STABLE URL (recommended): create a named Cloudflare tunnel,
+  then before Start Host.bat set:
+    set CLOUDFLARE_TUNNEL_TOKEN=your_token
+    set CLOUDFLARE_TUNNEL_URL=https://your-stable-hostname
+  That URL stays the same across restarts.
 - To stop the host: close the console, or run Stop Host.bat
 
 ------------------------------------------------
-DATA / BACKUPS
+DATA / BACKUPS (READ THIS)
 ------------------------------------------------
 
-Chat history, accounts, and uploads live on the host PC at:
+Chat history, accounts, and uploads live ONLY here on the host PC:
 
   %APPDATA%\Discord Lite Host
+  (full path example: C:\Users\YOU\AppData\Roaming\Discord Lite Host)
 
-Back up that folder if you care about keeping messages.
+Rules to avoid wiping your server again:
+1) Always start with Start Host.bat (not the Send folder, not random node).
+2) Stop the host BEFORE copying/replacing database.sqlite.
+3) Never delete the "Discord Lite Host" AppData folder when updating code (Iris still uses that folder).
+4) Clients must use the tunnel URL — they do not keep the shared server DB.
+5) Only run ONE host on port 3001 at a time.
+
+Automatic backups:
+  Every time the host starts, it copies database.sqlite into:
+    %APPDATA%\Discord Lite Host\backups\
+  (keeps the newest ~14 copies)
+
+Also periodically copy that whole "Discord Lite Host" folder to
+Google Drive / OneDrive / a USB stick.
 
 ------------------------------------------------
 UPDATING THE HOST
@@ -94,12 +113,30 @@ UPDATING THE HOST
 When a new Host zip is published:
 
 1) Stop Host.bat
-2) Unzip the new Discord-Lite-Host-….zip over the old folder
+2) Unzip the new Iris-Host-….zip over the old folder
    (keep your data in AppData — do not delete that)
 3) Start Host.bat again
-4) Re-share Discord-Lite-Host-URL.txt if the tunnel URL changed
+4) Re-share Iris-Host-URL.txt if the tunnel URL changed
 
 Client apps still update via the Setup installer + GitHub Releases.
+
+------------------------------------------------
+OPTIONAL: GIF SEARCH (TENOR)
+------------------------------------------------
+
+GIF picker uses Google Tenor API v2 via the Iris host.
+
+1) Create a free API key:
+   https://developers.google.com/tenor/guides/quickstart
+   (Google Cloud Console → enable Tenor API → create an API key)
+
+2) Set the env var before starting the host (PowerShell example):
+   setx TENOR_API_KEY "your_key_here"
+   (or DISCORD_LITE_TENOR_KEY)
+
+3) Restart the host (Stop Host.bat → Start Host.bat).
+
+Without a key, the GIF picker shows a clear message instead of results.
 
 ------------------------------------------------
 LINKS

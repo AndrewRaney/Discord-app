@@ -1,8 +1,8 @@
-@echo off
-title Stop Discord Lite Host
+﻿@echo off
+title Stop Iris Host
 
 echo.
-echo === Stop Discord Lite Host ===
+echo === Stop Iris Host ===
 echo Killing whatever is listening on port 3001...
 echo.
 

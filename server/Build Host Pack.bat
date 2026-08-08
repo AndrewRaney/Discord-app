@@ -1,6 +1,6 @@
-@echo off
+﻿@echo off
 cd /d "%~dp0"
-title Build Discord Lite Host Pack
+title Build Iris Host Pack
 
 echo.
 echo === Build Host Pack zip ===
@@ -10,8 +10,8 @@ echo.
 for /f "tokens=*" %%v in ('node -p "require('./package.json').version"') do set VER=%%v
 if "%VER%"=="" set VER=dev
 
-set "STAGE=%TEMP%\Discord-Lite-Host-%VER%"
-set "ZIP=dist\Discord-Lite-Host-%VER%.zip"
+set "STAGE=%TEMP%\Iris-Host-%VER%"
+set "ZIP=dist\Iris-Host-%VER%.zip"
 
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
 mkdir "%STAGE%" 2>nul

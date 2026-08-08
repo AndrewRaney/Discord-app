@@ -1,9 +1,9 @@
-@echo off
+﻿@echo off
 cd /d "%~dp0"
-title Discord Lite Host
+title Iris Host
 
 echo.
-echo === Discord Lite Host ===
+echo === Iris Host ===
 echo Runs the chat server only (tray icon when Electron is available).
 echo Leave this running while friends are playing.
 echo.
@@ -27,7 +27,7 @@ if not exist "node_modules\" (
 )
 
 if not exist "server.js" (
-  echo ERROR: server.js not found. Run this from the Discord Lite server folder.
+  echo ERROR: server.js not found. Run this from the Iris server folder.
   pause
   exit /b 1
 )
@@ -39,11 +39,11 @@ set "DISCORD_LITE_HOST_MODE=1"
 echo Data folder: %DISCORD_LITE_DATA%
 echo Starting host on port 3001...
 echo When the public tunnel is ready, see:
-echo   Desktop\Discord-Lite-Host-URL.txt
+echo   Desktop\Iris-Host-URL.txt
 echo.
 
 if exist "node_modules\electron\cli.js" (
-  echo Tray: look for "Discord Lite Host — running" in the system tray.
+  echo Tray: look for "Iris Host — running" in the system tray.
   echo.
   call npx --yes electron . --host
 ) else (

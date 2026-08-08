@@ -1,8 +1,8 @@
 {
-  "name": "discord-lite",
-  "productName": "Discord Lite",
-  "version": "1.1.1",
-  "description": "Local Discord-style chat app",
+  "name": "iris",
+  "productName": "Iris",
+  "version": "1.2.0",
+  "description": "Iris — Greek messenger chat for friends",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -34,7 +34,7 @@
   },
   "build": {
     "appId": "com.andrew.discordlite",
-    "productName": "Discord Lite",
+    "productName": "Iris",
     "asar": false,
     "directories": {
       "output": "dist",
@@ -66,18 +66,18 @@
         "portable"
       ],
       "icon": "build-resources/icon.png",
-      "artifactName": "Discord-Lite-Setup-${version}.${ext}"
+      "artifactName": "Iris-Setup-${version}.${ext}"
     },
     "portable": {
-      "artifactName": "Discord-Lite-Portable-${version}.exe"
+      "artifactName": "Iris-Portable-${version}.exe"
     },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
-      "shortcutName": "Discord Lite",
-      "artifactName": "Discord-Lite-Setup-${version}.exe"
+      "shortcutName": "Iris",
+      "artifactName": "Iris-Setup-${version}.exe"
     }
   }
 }

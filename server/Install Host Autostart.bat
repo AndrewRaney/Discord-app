@@ -1,6 +1,6 @@
-@echo off
+﻿@echo off
 cd /d "%~dp0"
-title Install Discord Lite Host Autostart
+title Install Iris Host Autostart
 
 echo.
 echo === Install Host Autostart ===
@@ -9,10 +9,10 @@ echo.
 
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "TARGET=%~dp0Start Host.bat"
-set "LINK=%STARTUP%\Discord Lite Host.lnk"
+set "LINK=%STARTUP%\Iris Host.lnk"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LINK%'); $s.TargetPath = '%TARGET%'; $s.WorkingDirectory = '%~dp0'; $s.WindowStyle = 1; $s.Description = 'Discord Lite always-on host'; $s.Save()"
+  "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LINK%'); $s.TargetPath = '%TARGET%'; $s.WorkingDirectory = '%~dp0'; $s.WindowStyle = 1; $s.Description = 'Iris always-on host'; $s.Save()"
 
 if errorlevel 1 (
   echo Failed to create Startup shortcut.

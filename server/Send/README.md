@@ -1,12 +1,12 @@
-# Discord App - Setup Guide
+﻿# DISABLED — do not run anything here
 
-## Requirements
-- [Node.js](https://nodejs.org) (download and install if you don't have it)
+This folder is an outdated packaging stub. It created empty/wrong databases
+and missing UI (no index.html).
 
-## First-time setup
-1. Double-click `setup.bat` — this installs all required packages
+Use the parent folder:
 
-## Running the app
-1. Double-click `server.bat` — this starts both the server and the app
+  Discord-app\server\
 
-That's it. Two windows will open (server + app). Close both when done.
+- Start Host.bat
+- Iris.bat
+- node server.js

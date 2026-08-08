@@ -1,8 +1,8 @@
 @echo off
-title Migrate Discord Lite data to Host folder
+title Migrate Iris data to Host folder
 
 echo.
-echo === Migrate accounts / messages to Host PC ===
+echo === Migrate accounts / messages to Host folder ===
 echo Copies database.sqlite + uploads into:
 echo   %APPDATA%\Discord Lite Host
 echo.
@@ -16,7 +16,7 @@ set "SRC_UPLOADS="
 if exist "%APPDATA%\Discord Lite\database.sqlite" (
   set "SRC_DB=%APPDATA%\Discord Lite\database.sqlite"
   set "SRC_UPLOADS=%APPDATA%\Discord Lite\uploads"
-  echo Found: Discord Lite app data
+  echo Found: Iris app data ^(legacy AppData folder name^)
 ) else if exist "%~dp0database.sqlite" (
   set "SRC_DB=%~dp0database.sqlite"
   set "SRC_UPLOADS=%~dp0uploads"
@@ -31,7 +31,7 @@ if not defined SRC_DB (
   echo No database.sqlite found.
   echo.
   echo Place database.sqlite next to this script, or run on the PC
-  echo that already has Discord Lite installed ^(AppData^).
+  echo that already has Iris installed ^(AppData^).
   pause
   exit /b 1
 )
@@ -49,6 +49,12 @@ if /i not "%CONFIRM%"=="Y" (
 
 if not exist "%DEST%" mkdir "%DEST%"
 if not exist "%DEST%\uploads" mkdir "%DEST%\uploads"
+if not exist "%DEST%\backups" mkdir "%DEST%\backups"
+
+if exist "%DEST%\database.sqlite" (
+  echo Backing up existing host DB before overwrite...
+  copy /Y "%DEST%\database.sqlite" "%DEST%\backups\database-pre-migrate.sqlite" >nul
+)
 
 copy /Y "%SRC_DB%" "%DEST%\database.sqlite" >nul
 if errorlevel 1 (

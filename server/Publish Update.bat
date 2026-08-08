@@ -1,11 +1,15 @@
-@echo off
+﻿@echo off
 cd /d "%~dp0"
-title Publish Discord Lite update
+title Publish Iris update
 
 echo.
-echo === Publish Discord Lite update to GitHub ===
+echo === Publish Iris update to GitHub ===
 echo Friends on the installer get this automatically.
 echo Host pack zip is for the always-on second PC.
+echo.
+for /f "tokens=*" %%v in ('node -p "require('./package.json').version"') do set VER=%%v
+echo Publishing version: v%VER%
+echo If this version already exists on GitHub, bump package.json first.
 echo.
 
 where node >nul 2>&1 || (echo Need Node.js & pause & exit /b 1)
@@ -20,9 +24,9 @@ call "%~dp0Build Host Pack.bat" nopause
 if errorlevel 1 ( echo Host pack failed & pause & exit /b 1 )
 
 for /f "tokens=*" %%v in ('node -p "require('./package.json').version"') do set VER=%%v
-set SETUP=dist\Discord-Lite-Setup-%VER%.exe
-set PORTABLE=dist\Discord-Lite-Portable-%VER%.exe
-set HOSTPACK=dist\Discord-Lite-Host-%VER%.zip
+set SETUP=dist\Iris-Setup-%VER%.exe
+set PORTABLE=dist\Iris-Portable-%VER%.exe
+set HOSTPACK=dist\Iris-Host-%VER%.zip
 
 if not exist "%SETUP%" (
   echo Missing %SETUP%
@@ -37,7 +41,7 @@ if not exist "%HOSTPACK%" (
 
 echo.
 echo Creating GitHub release v%VER% ...
-gh release create "v%VER%" "%SETUP%" "%PORTABLE%" "%HOSTPACK%" --title "Discord Lite v%VER%" --notes "Setup = clients (auto-update). Host zip = always-on second PC (see How to Host.txt inside)." --repo AndrewRaney/Discord-app
+gh release create "v%VER%" "%SETUP%" "%PORTABLE%" "%HOSTPACK%" --title "Iris v%VER%" --notes "Setup = clients (auto-update). Host zip = always-on second PC (see How to Host.txt inside)." --repo AndrewRaney/Discord-app
 if errorlevel 1 (
   echo Release may already exist — uploading assets...
   gh release upload "v%VER%" "%SETUP%" "%PORTABLE%" "%HOSTPACK%" --clobber --repo AndrewRaney/Discord-app
