@@ -38,6 +38,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 app.use("/uploads", express.static(UPLOADS_DIR));
+app.use("/sounds", express.static(path.join(__dirname, "sounds")));
 
 const SECRET = "secret123";
 
@@ -102,6 +103,14 @@ const Channel = sequelize.define("Channel", {
   type: { type: DataTypes.STRING, allowNull: false, defaultValue: "text" },
   restricted: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   allowRoleIds: { type: DataTypes.TEXT, allowNull: true, defaultValue: "[]" },
+  categoryId: { type: DataTypes.INTEGER, allowNull: true },
+  position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+});
+
+const ChannelCategory = sequelize.define("ChannelCategory", {
+  serverId: { type: DataTypes.INTEGER, allowNull: false },
+  name: { type: DataTypes.STRING, allowNull: false },
+  position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
 });
 
 const ServerMember = sequelize.define("ServerMember", {
@@ -137,6 +146,15 @@ const Message = sequelize.define("Message", {
   replyPreview: { type: DataTypes.STRING(200), allowNull: true },  // Feature 4
   replyAuthor: { type: DataTypes.STRING, allowNull: true },        // Feature 4
   pinned: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false }, // Feature 5
+  threadId: { type: DataTypes.INTEGER, allowNull: true }, // channel message thread (null = main channel)
+});
+
+const MessageThread = sequelize.define("MessageThread", {
+  serverId: { type: DataTypes.INTEGER, allowNull: false },
+  channelId: { type: DataTypes.INTEGER, allowNull: false },
+  parentMessageId: { type: DataTypes.INTEGER, allowNull: false },
+  name: { type: DataTypes.STRING, allowNull: true },
+  createdBy: { type: DataTypes.STRING, allowNull: false },
 });
 
 const DirectMessage = sequelize.define("DirectMessage", {
@@ -310,6 +328,52 @@ async function memberCanAccessChannel(channel, username) {
   return member.customRoleId && allowed.includes(Number(member.customRoleId));
 }
 
+/** Ensure a server has categories and every channel is assigned + positioned. */
+async function ensureServerCategories(serverId) {
+  let cats = await ChannelCategory.findAll({ where: { serverId }, order: [["position", "ASC"], ["id", "ASC"]] });
+  if (!cats.length) {
+    const textCat = await ChannelCategory.create({ serverId, name: "Text Channels", position: 0 });
+    const voiceCat = await ChannelCategory.create({ serverId, name: "Voice Channels", position: 1 });
+    cats = [textCat, voiceCat];
+  }
+  const textCat = cats.find(c => /text/i.test(c.name)) || cats[0];
+  const voiceCat = cats.find(c => /voice/i.test(c.name)) || cats[1] || cats[0];
+
+  const channels = await Channel.findAll({ where: { serverId }, order: [["position", "ASC"], ["createdAt", "ASC"], ["id", "ASC"]] });
+  const nextPos = {};
+  for (const c of cats) nextPos[c.id] = 0;
+  for (const ch of channels) {
+    if (ch.categoryId != null && cats.some(c => c.id === ch.categoryId)) {
+      nextPos[ch.categoryId] = Math.max(nextPos[ch.categoryId] || 0, (ch.position || 0) + 1);
+      continue;
+    }
+    const cat = ch.type === "voice" ? voiceCat : textCat;
+    const pos = nextPos[cat.id] || 0;
+    ch.categoryId = cat.id;
+    ch.position = pos;
+    nextPos[cat.id] = pos + 1;
+    await ch.save();
+  }
+  return ChannelCategory.findAll({ where: { serverId }, order: [["position", "ASC"], ["id", "ASC"]] });
+}
+
+async function listChannelsForUser(serverId, username) {
+  const categories = await ensureServerCategories(serverId);
+  const channels = await Channel.findAll({
+    where: { serverId },
+    order: [["position", "ASC"], ["createdAt", "ASC"], ["id", "ASC"]],
+  });
+  const visible = [];
+  for (const ch of channels) {
+    if (!username || await memberCanAccessChannel(ch, username)) visible.push(ch);
+  }
+  return { categories, channels: visible };
+}
+
+function emitChannelsUpdated(serverId) {
+  io.to(`server_${serverId}`).emit("channels_updated", { serverId: Number(serverId) });
+}
+
 async function emitVoiceState(channelId) {
   const key = String(channelId);
   const users = voiceRooms.get(key) || new Set();
@@ -353,10 +417,106 @@ io.on("connection", (socket) => {
 
   socket.on("join_channel", async ({ channelId, serverId }) => {
     if (!channelId) return;
-    Array.from(socket.rooms).forEach((room) => { if (room !== socket.id && room.startsWith("channel_")) socket.leave(room); });
+    Array.from(socket.rooms).forEach((room) => {
+      if (room !== socket.id && room.startsWith("channel_")) socket.leave(room);
+      if (room !== socket.id && room.startsWith("msgthread_")) socket.leave(room);
+    });
     socket.join(`channel_${channelId}`);
-    const messages = await Message.findAll({ where: { channelId }, order: [["createdAt", "ASC"]] });
-    socket.emit("load_messages", messages);
+    const messages = await Message.findAll({
+      where: { channelId, threadId: { [Op.is]: null } },
+      order: [["createdAt", "ASC"]],
+    });
+    // Attach reply counts for threads rooted at these messages
+    const parents = messages.map(m => m.id);
+    const threads = parents.length
+      ? await MessageThread.findAll({ where: { parentMessageId: { [Op.in]: parents } } })
+      : [];
+    const threadByParent = Object.fromEntries(threads.map(t => [t.parentMessageId, t]));
+    const counts = {};
+    for (const t of threads) {
+      counts[t.id] = await Message.count({ where: { threadId: t.id } });
+    }
+    const enriched = messages.map(m => {
+      const json = m.toJSON();
+      const th = threadByParent[m.id];
+      if (th) {
+        json.threadIdForParent = th.id;
+        json.threadReplyCount = counts[th.id] || 0;
+        json.threadName = th.name;
+      }
+      return json;
+    });
+    socket.emit("load_messages", enriched);
+  });
+
+  socket.on("create_message_thread", async ({ parentMessageId, username, name }) => {
+    if (!parentMessageId || !username) return;
+    const parent = await Message.findByPk(parentMessageId);
+    if (!parent || !parent.channelId || parent.threadId) {
+      socket.emit("thread_error", { error: "Can only start a thread from a channel message" });
+      return;
+    }
+    const channel = await Channel.findByPk(parent.channelId);
+    if (!channel || !(await memberCanAccessChannel(channel, username))) {
+      socket.emit("thread_error", { error: "No access" });
+      return;
+    }
+    let thread = await MessageThread.findOne({ where: { parentMessageId: parent.id } });
+    if (!thread) {
+      const autoName = (name && String(name).trim())
+        || String(parent.message).replace(/\s+/g, " ").slice(0, 50)
+        || "Thread";
+      thread = await MessageThread.create({
+        serverId: channel.serverId,
+        channelId: channel.id,
+        parentMessageId: parent.id,
+        name: autoName,
+        createdBy: username,
+      });
+    }
+    const replyCount = await Message.count({ where: { threadId: thread.id } });
+    socket.join(`msgthread_${thread.id}`);
+    io.to(`channel_${channel.id}`).emit("thread_created", {
+      thread: thread.toJSON(),
+      parentMessageId: parent.id,
+      replyCount,
+    });
+    socket.emit("thread_opened", {
+      thread: thread.toJSON(),
+      parent,
+      messages: await Message.findAll({ where: { threadId: thread.id }, order: [["createdAt", "ASC"]] }),
+      replyCount,
+    });
+  });
+
+  socket.on("join_message_thread", async ({ threadId, username }) => {
+    if (!threadId) return;
+    const thread = await MessageThread.findByPk(threadId);
+    if (!thread) {
+      socket.emit("thread_error", { error: "Thread not found" });
+      return;
+    }
+    const channel = await Channel.findByPk(thread.channelId);
+    if (!channel || (username && !(await memberCanAccessChannel(channel, username)))) {
+      socket.emit("thread_error", { error: "No access" });
+      return;
+    }
+    Array.from(socket.rooms).forEach((room) => {
+      if (room !== socket.id && room.startsWith("msgthread_")) socket.leave(room);
+    });
+    socket.join(`msgthread_${threadId}`);
+    const parent = await Message.findByPk(thread.parentMessageId);
+    const messages = await Message.findAll({ where: { threadId }, order: [["createdAt", "ASC"]] });
+    socket.emit("thread_opened", {
+      thread: thread.toJSON(),
+      parent,
+      messages,
+      replyCount: messages.length,
+    });
+  });
+
+  socket.on("leave_message_thread", ({ threadId }) => {
+    if (threadId) socket.leave(`msgthread_${threadId}`);
   });
 
   socket.on("join_dm", async ({ dmKey: key, username: joinUser }) => {
@@ -368,6 +528,7 @@ io.on("connection", (socket) => {
     Array.from(socket.rooms).forEach((room) => {
       if (room !== socket.id && room.startsWith("dm_")) socket.leave(room);
       if (room !== socket.id && room.startsWith("channel_")) socket.leave(room);
+      if (room !== socket.id && room.startsWith("msgthread_")) socket.leave(room);
     });
     socket.join(`dm_${key}`);
     const messages = await Message.findAll({ where: { dmKey: key }, order: [["createdAt", "ASC"]] });
@@ -384,7 +545,7 @@ io.on("connection", (socket) => {
 
   // Feature 4: replyToId support in send_message
   socket.on("send_message", async (data) => {
-    const { channelId, dmKey: key, username, message, replyToId } = data;
+    const { channelId, dmKey: key, username, message, replyToId, threadId } = data;
     if (!username || !message) return;
 
     let replyPreview = null;
@@ -397,11 +558,46 @@ io.on("connection", (socket) => {
       }
     }
 
+    if (threadId) {
+      const thread = await MessageThread.findByPk(threadId);
+      if (!thread) return;
+      const channel = await Channel.findByPk(thread.channelId);
+      if (!channel || !(await memberCanAccessChannel(channel, username))) return;
+      const saved = await Message.create({
+        serverId: channel.serverId,
+        channelId: channel.id,
+        username,
+        message,
+        replyToId: replyToId || null,
+        replyPreview,
+        replyAuthor,
+        threadId: thread.id,
+      });
+      const replyCount = await Message.count({ where: { threadId: thread.id } });
+      const payload = { ...saved.toJSON(), threadReplyCount: replyCount };
+      io.to(`msgthread_${thread.id}`).emit("receive_message", payload);
+      io.to(`channel_${channel.id}`).emit("thread_reply_count", {
+        threadId: thread.id,
+        parentMessageId: thread.parentMessageId,
+        replyCount,
+      });
+      return;
+    }
+
     if (channelId) {
       const channel = await Channel.findByPk(channelId);
       if (!channel) return;
       if (!(await memberCanAccessChannel(channel, username))) return;
-      const saved = await Message.create({ serverId: channel.serverId, channelId, username, message, replyToId: replyToId || null, replyPreview, replyAuthor });
+      const saved = await Message.create({
+        serverId: channel.serverId,
+        channelId,
+        username,
+        message,
+        replyToId: replyToId || null,
+        replyPreview,
+        replyAuthor,
+        threadId: null,
+      });
       io.to(`channel_${channelId}`).emit("receive_message", saved);
       // Alert all online server members (even if they aren't in this channel room)
       const members = await ServerMember.findAll({ where: { serverId: channel.serverId } });
@@ -744,29 +940,121 @@ app.get("/my-servers/:username", async (req, res) => {
 app.get("/channels/:serverId", async (req, res) => {
   try {
     const username = req.query.username || "";
-    const channels = await Channel.findAll({ where: { serverId: req.params.serverId }, order: [["type", "ASC"], ["createdAt", "ASC"]] });
-    if (!username) return res.json(channels);
-    const visible = [];
-    for (const ch of channels) {
-      if (await memberCanAccessChannel(ch, username)) visible.push(ch);
-    }
-    res.json(visible);
+    const payload = await listChannelsForUser(req.params.serverId, username);
+    res.json(payload);
   } catch { res.status(500).json({ error: "Failed to load channels" }); }
+});
+
+app.post("/create-category", async (req, res) => {
+  try {
+    const { serverId, name, username } = req.body;
+    if (!serverId || !name || !username) return res.status(400).json({ error: "Missing data" });
+    if (!await hasPerm(serverId, username, "canManageChannels"))
+      return res.status(403).json({ error: "No permission" });
+    await ensureServerCategories(serverId);
+    const maxPos = await ChannelCategory.max("position", { where: { serverId } });
+    const category = await ChannelCategory.create({
+      serverId,
+      name: String(name).trim().slice(0, 100) || "New Category",
+      position: (maxPos == null ? -1 : maxPos) + 1,
+    });
+    emitChannelsUpdated(serverId);
+    res.json({ message: "Category created", category });
+  } catch { res.status(500).json({ error: "Failed to create category" }); }
+});
+
+app.post("/rename-category", async (req, res) => {
+  try {
+    const { categoryId, name, username } = req.body;
+    const category = await ChannelCategory.findByPk(categoryId);
+    if (!category) return res.status(404).json({ error: "Category not found" });
+    if (!await hasPerm(category.serverId, username, "canManageChannels"))
+      return res.status(403).json({ error: "No permission" });
+    category.name = String(name || "").trim().slice(0, 100) || category.name;
+    await category.save();
+    emitChannelsUpdated(category.serverId);
+    res.json({ message: "Category renamed", category });
+  } catch { res.status(500).json({ error: "Failed to rename category" }); }
+});
+
+app.post("/delete-category", async (req, res) => {
+  try {
+    const { categoryId, username } = req.body;
+    const category = await ChannelCategory.findByPk(categoryId);
+    if (!category) return res.status(404).json({ error: "Category not found" });
+    if (!await hasPerm(category.serverId, username, "canManageChannels"))
+      return res.status(403).json({ error: "No permission" });
+    const cats = await ensureServerCategories(category.serverId);
+    if (cats.length <= 1) return res.status(400).json({ error: "Cannot delete the last category" });
+    const fallback = cats.find(c => c.id !== category.id);
+    const channels = await Channel.findAll({ where: { categoryId: category.id } });
+    let pos = await Channel.max("position", { where: { categoryId: fallback.id } });
+    pos = pos == null ? 0 : pos + 1;
+    for (const ch of channels) {
+      ch.categoryId = fallback.id;
+      ch.position = pos++;
+      await ch.save();
+    }
+    await category.destroy();
+    emitChannelsUpdated(category.serverId);
+    res.json({ message: "Category deleted" });
+  } catch { res.status(500).json({ error: "Failed to delete category" }); }
+});
+
+app.post("/reorder-channels", async (req, res) => {
+  try {
+    const { serverId, username, categories } = req.body;
+    if (!serverId || !username || !Array.isArray(categories))
+      return res.status(400).json({ error: "Missing data" });
+    if (!await hasPerm(serverId, username, "canManageChannels"))
+      return res.status(403).json({ error: "No permission" });
+    for (let i = 0; i < categories.length; i++) {
+      const entry = categories[i];
+      const cat = await ChannelCategory.findOne({ where: { id: entry.id, serverId } });
+      if (!cat) continue;
+      cat.position = entry.position != null ? entry.position : i;
+      await cat.save();
+      const ids = Array.isArray(entry.channelIds) ? entry.channelIds : [];
+      for (let j = 0; j < ids.length; j++) {
+        await Channel.update(
+          { categoryId: cat.id, position: j },
+          { where: { id: ids[j], serverId } }
+        );
+      }
+    }
+    emitChannelsUpdated(serverId);
+    res.json({ message: "Channels reordered" });
+  } catch { res.status(500).json({ error: "Failed to reorder channels" }); }
 });
 
 app.post("/create-channel", async (req, res) => {
   try {
-    const { serverId, name, type, username, restricted, allowRoleIds } = req.body;
+    const { serverId, name, type, username, restricted, allowRoleIds, categoryId } = req.body;
     if (!serverId || !name || !username) return res.status(400).json({ error: "Missing data" });
     const member = await ServerMember.findOne({ where: { serverId, username } });
-    if (!member || !["owner", "admin"].includes(member.role)) return res.status(403).json({ error: "No permission" });
+    if (!member || !["owner", "admin"].includes(member.role)) {
+      if (!await hasPerm(serverId, username, "canManageChannels"))
+        return res.status(403).json({ error: "No permission" });
+    }
+    const cats = await ensureServerCategories(serverId);
+    const chType = type || "text";
+    let cat = categoryId ? cats.find(c => c.id === Number(categoryId)) : null;
+    if (!cat) {
+      cat = chType === "voice"
+        ? (cats.find(c => /voice/i.test(c.name)) || cats[cats.length - 1])
+        : (cats.find(c => /text/i.test(c.name)) || cats[0]);
+    }
+    const maxPos = await Channel.max("position", { where: { categoryId: cat.id } });
     const channel = await Channel.create({
       serverId,
       name: name.trim(),
-      type: type || "text",
+      type: chType,
       restricted: !!restricted,
       allowRoleIds: JSON.stringify(Array.isArray(allowRoleIds) ? allowRoleIds : []),
+      categoryId: cat.id,
+      position: (maxPos == null ? -1 : maxPos) + 1,
     });
+    emitChannelsUpdated(serverId);
     res.json({ message: "Channel created", channel });
   } catch { res.status(500).json({ error: "Failed to create channel" }); }
 });
@@ -794,6 +1082,7 @@ app.post("/delete-channel", async (req, res) => {
     if (!member || !["owner", "admin"].includes(member.role)) return res.status(403).json({ error: "No permission" });
     await Message.destroy({ where: { channelId } });
     await channel.destroy();
+    emitChannelsUpdated(channel.serverId);
     res.json({ message: "Channel deleted" });
   } catch { res.status(500).json({ error: "Failed to delete channel" }); }
 });
@@ -1557,12 +1846,23 @@ app.post("/create-server", async (req, res) => {
     if (!serverName || !username) return res.status(400).json({ error: "Missing data" });
     const newServer = await ChatServer.create({ name: serverName.trim(), ownerUsername: username });
     await ServerMember.create({ serverId: newServer.id, username, role: "owner" });
+    const textCat = await ChannelCategory.create({ serverId: newServer.id, name: "Text Channels", position: 0 });
+    const voiceCat = await ChannelCategory.create({ serverId: newServer.id, name: "Voice Channels", position: 1 });
     const tpl = SERVER_TEMPLATES[template];
-    if (tpl) {
-      for (const ch of tpl.channels) await Channel.create({ serverId: newServer.id, name: ch.name, type: ch.type });
-    } else {
-      await Channel.create({ serverId: newServer.id, name: "general", type: "text" });
-      await Channel.create({ serverId: newServer.id, name: "General Voice", type: "voice" });
+    let textPos = 0;
+    let voicePos = 0;
+    const seed = tpl
+      ? tpl.channels
+      : [{ name: "general", type: "text" }, { name: "General Voice", type: "voice" }];
+    for (const ch of seed) {
+      const isVoice = ch.type === "voice";
+      await Channel.create({
+        serverId: newServer.id,
+        name: ch.name,
+        type: ch.type,
+        categoryId: isVoice ? voiceCat.id : textCat.id,
+        position: isVoice ? voicePos++ : textPos++,
+      });
     }
     res.json({ message: "Server created", server: newServer });
   } catch { res.status(500).json({ error: "Failed to create server" }); }
@@ -2104,21 +2404,52 @@ function startServer() {
   console.log(" ", DB_PATH);
   console.log("----------------------------------------");
   backupDatabaseOnStartup();
-  // Only ALTER schema when version marker is behind (avoids rewriting DB every boot)
-  const SCHEMA_VERSION = 5;
+  // Prefer sync without alter — SQLite alter often fails (Invites_backup UNIQUE errors).
+  // New columns/tables are added with safe helpers below.
+  const SCHEMA_VERSION = 7;
   const schemaMarker = path.join(DATA_DIR, ".schema-version");
-  let doAlter = true;
-  try {
-    const cur = parseInt(fs.readFileSync(schemaMarker, "utf8"), 10);
-    if (cur >= SCHEMA_VERSION) doAlter = false;
-  } catch (_) {}
+  let doAlter = false;
   if (process.env.DISCORD_LITE_DB_ALTER === "1") doAlter = true;
-  if (process.env.DISCORD_LITE_DB_ALTER === "0") doAlter = false;
-  if (doAlter) console.log("DB schema sync: alter=true (version bump or first run)");
-  else console.log("DB schema sync: alter=false (schema up to date)");
+  if (doAlter) console.log("DB schema sync: alter=true (forced)");
+  else console.log("DB schema sync: alter=false (safe mode)");
 
-  return sequelize.sync({ alter: doAlter }).then(() => {
+  async function tableHasColumn(table, column) {
+    const [rows] = await sequelize.query(`PRAGMA table_info(\`${table}\`)`);
+    return (rows || []).some((r) => r.name === column);
+  }
+
+  async function safeAddColumn(table, column, sqlType) {
+    if (await tableHasColumn(table, column)) return;
+    await sequelize.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${sqlType}`);
+    console.log(`Added column ${table}.${column}`);
+  }
+
+  async function cleanupFailedAlterBackups() {
+    const [tables] = await sequelize.query(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_backup'"
+    );
+    for (const t of tables || []) {
+      try {
+        await sequelize.query(`DROP TABLE IF EXISTS \`${t.name}\``);
+        console.log("Dropped leftover", t.name);
+      } catch (_) {}
+    }
+  }
+
+  return sequelize.sync({ alter: doAlter }).then(async () => {
     console.log("Database synced");
+    try {
+      await cleanupFailedAlterBackups();
+      await ChannelCategory.sync();
+      await MessageThread.sync();
+      await safeAddColumn("Channels", "categoryId", "INTEGER");
+      await safeAddColumn("Channels", "position", "INTEGER NOT NULL DEFAULT 0");
+      await safeAddColumn("Messages", "threadId", "INTEGER");
+      const servers = await ChatServer.findAll({ attributes: ["id"] });
+      for (const s of servers) await ensureServerCategories(s.id);
+    } catch (e) {
+      console.warn("Schema migration helpers:", e.message || e);
+    }
     try { fs.writeFileSync(schemaMarker, String(SCHEMA_VERSION), "utf8"); } catch (_) {}
     return new Promise((resolve, reject) => {
       server.once("error", (err) => {
